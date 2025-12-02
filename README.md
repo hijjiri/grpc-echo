@@ -1,25 +1,11 @@
-# grpc-echo
+動作確認
+Echo API
+grpcurl -plaintext -d '{"message":"hello"}' \
+  localhost:50051 echo.v1.EchoService/Echo
 
-Go のリハビリ用に作成した gRPC サーバー。
+Todo API
+新規追加
+go run ./cmd/todo_client -mode=create -title="sample todo"
 
-- EchoService: 送られた文字列をそのまま返す
-- TodoService: メモリ内に Todo を保持する簡易 API
-
-## 動作環境
-
-- Go 1.24.10 以上
-- protoc
-- protoc-gen-go
-- protoc-gen-go-grpc
-
-## セットアップ
-
-```bash
-git clone https://github.com/hijjiri/grpc-echo.git
-cd grpc-echo
-
-# 依存関係の取得
-go mod tidy
-
-# protobuf からコード生成
-make proto
+一覧取得
+go run ./cmd/todo_client -mode=list
