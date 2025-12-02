@@ -10,6 +10,7 @@ import (
 	todosrv "github.com/hijjiri/grpc-echo/internal/todo"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
@@ -20,11 +21,12 @@ func main() {
 
 	s := grpc.NewServer()
 
-	// 既存の EchoService
+	// 既存サービスの登録
 	echov1.RegisterEchoServiceServer(s, server.NewEchoServer())
-
-	// 追加した TodoService
 	todov1.RegisterTodoServiceServer(s, todosrv.NewTodoServer())
+
+	// ★ ここで reflection を有効化
+	reflection.Register(s)
 
 	log.Println("gRPC server (Echo + Todo) listening on :50051")
 
