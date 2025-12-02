@@ -61,7 +61,7 @@ com-p:
 	$(DOCKER_COMPOSE) ps
 
 # ---------- Tools ----------
-.PHONY: fmt vet lint
+.PHONY: fmt vet lint tree
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
 
@@ -69,6 +69,9 @@ vet:
 	$(GO) vet ./...
 
 lint: fmt vet
+
+tree:
+	tree -L 3
 
 # ---------- Testing ----------
 .PHONY: test
