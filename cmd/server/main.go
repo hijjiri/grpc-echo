@@ -1,3 +1,4 @@
+// cmd/server/main.go
 package main
 
 import (
@@ -10,7 +11,7 @@ import (
 	echov1 "github.com/hijjiri/grpc-echo/api/echo/v1"
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
 	"github.com/hijjiri/grpc-echo/internal/server"
-	todosrv "github.com/hijjiri/grpc-echo/internal/todo"
+	todopkg "github.com/hijjiri/grpc-echo/internal/todo"
 
 	_ "github.com/go-sql-driver/mysql"
 	"google.golang.org/grpc"
@@ -55,7 +56,7 @@ func main() {
 
 	log.Println("connected to MySQL:", dbHost, dbPort, dbName)
 
-	// --- gRPC サーバー ---
+	// --- gRPC ---
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -66,11 +67,12 @@ func main() {
 	// Echo
 	echov1.RegisterEchoServiceServer(s, server.NewEchoServer())
 
-	// Todo（DB バックエンド版）
-	todoServer := todosrv.NewTodoServer(db)
+	// Todo: Repository 経由で MySQL 実装を注入
+	todoRepo := todopkg.NewMySQLTodoRepository(db)
+	todoServer := todopkg.NewTodoServer(todoRepo)
 	todov1.RegisterTodoServiceServer(s, todoServer)
 
-	// Health サーバー
+	// Health
 	healthServer := health.NewServer()
 	healthpb.RegisterHealthServer(s, healthServer)
 

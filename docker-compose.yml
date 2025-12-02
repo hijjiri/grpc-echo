@@ -1,6 +1,20 @@
 version: '3.9'
 
 services:
+  grpc-server:
+    build: .
+    container_name: grpc-echo-server
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: grpcdb
+    ports:
+      - "50051:50051"
+
   db:
     image: mysql:8.4
     container_name: grpc-mysql

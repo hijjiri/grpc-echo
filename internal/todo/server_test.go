@@ -10,7 +10,8 @@ import (
 )
 
 func TestCreateTodo_Success(t *testing.T) {
-	s := NewTodoServer()
+	repo := NewInMemoryTodoRepository()
+	s := NewTodoServer(repo)
 
 	ctx := context.Background()
 	req := &todov1.CreateTodoRequest{Title: "テストタスク"}
@@ -32,7 +33,7 @@ func TestCreateTodo_Success(t *testing.T) {
 }
 
 func TestCreateTodo_EmptyTitle(t *testing.T) {
-	s := NewTodoServer()
+	s := NewTodoServer(NewInMemoryTodoRepository())
 
 	ctx := context.Background()
 	req := &todov1.CreateTodoRequest{Title: ""}
@@ -53,7 +54,7 @@ func TestCreateTodo_EmptyTitle(t *testing.T) {
 }
 
 func TestDeleteTodo_NotFound(t *testing.T) {
-	s := NewTodoServer()
+	s := NewTodoServer(NewInMemoryTodoRepository())
 
 	ctx := context.Background()
 	req := &todov1.DeleteTodoRequest{Id: 999}
@@ -74,7 +75,7 @@ func TestDeleteTodo_NotFound(t *testing.T) {
 }
 
 func TestDeleteTodo_Success(t *testing.T) {
-	s := NewTodoServer()
+	s := NewTodoServer(NewInMemoryTodoRepository())
 
 	// まず1件作る
 	ctx := context.Background()

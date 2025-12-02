@@ -1,8 +1,8 @@
+// internal/todo/server.go
 package todo
 
 import (
 	"context"
-	"database/sql"
 
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
 	"google.golang.org/grpc/codes"
@@ -12,12 +12,12 @@ import (
 type TodoServer struct {
 	todov1.UnimplementedTodoServiceServer
 
-	db *sql.DB
+	repo TodoRepository
 }
 
-func NewTodoServer(db *sql.DB) *TodoServer {
+func NewTodoServer(repo TodoRepository) *TodoServer {
 	return &TodoServer{
-		db: db,
+		repo: repo,
 	}
 }
 
@@ -27,57 +27,18 @@ func (s *TodoServer) CreateTodo(ctx context.Context, req *todov1.CreateTodoReque
 		return nil, status.Error(codes.InvalidArgument, "title must not be empty")
 	}
 
-	res, err := s.db.ExecContext(
-		ctx,
-		"INSERT INTO todos (title, done) VALUES (?, ?)",
-		title,
-		false,
-	)
+	t, err := s.repo.Create(ctx, title)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to insert todo")
+		return nil, status.Error(codes.Internal, "failed to create todo")
 	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to get last insert id")
-	}
-
-	return &todov1.Todo{
-		Id:    id,
-		Title: title,
-		Done:  false,
-	}, nil
+	return t, nil
 }
 
 func (s *TodoServer) ListTodos(ctx context.Context, req *todov1.ListTodosRequest) (*todov1.ListTodosResponse, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, title, done FROM todos ORDER BY id")
+	todos, err := s.repo.List(ctx)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to query todos")
+		return nil, status.Error(codes.Internal, "failed to list todos")
 	}
-	defer rows.Close()
-
-	var todos []*todov1.Todo
-
-	for rows.Next() {
-		var (
-			id    int64
-			title string
-			done  bool
-		)
-		if err := rows.Scan(&id, &title, &done); err != nil {
-			return nil, status.Error(codes.Internal, "failed to scan todo")
-		}
-		todos = append(todos, &todov1.Todo{
-			Id:    id,
-			Title: title,
-			Done:  done,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, status.Error(codes.Internal, "rows error")
-	}
-
 	return &todov1.ListTodosResponse{
 		Todos: todos,
 	}, nil
@@ -89,17 +50,11 @@ func (s *TodoServer) DeleteTodo(ctx context.Context, req *todov1.DeleteTodoReque
 		return nil, status.Error(codes.InvalidArgument, "id must be non-zero")
 	}
 
-	res, err := s.db.ExecContext(ctx, "DELETE FROM todos WHERE id = ?", id)
+	ok, err := s.repo.Delete(ctx, id)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to delete todo")
 	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to get rows affected")
-	}
-
-	if affected == 0 {
+	if !ok {
 		return nil, status.Error(codes.NotFound, "todo not found")
 	}
 
