@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type TodoServer struct {
@@ -23,6 +25,11 @@ func NewTodoServer() *TodoServer {
 }
 
 func (s *TodoServer) CreateTodo(ctx context.Context, req *todov1.CreateTodoRequest) (*todov1.Todo, error) {
+	title := req.GetTitle()
+	if title == "" {
+		return nil, status.Error(codes.InvalidArgument, "title must not be empty")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -31,7 +38,7 @@ func (s *TodoServer) CreateTodo(ctx context.Context, req *todov1.CreateTodoReque
 
 	todo := &todov1.Todo{
 		Id:    id,
-		Title: req.GetTitle(),
+		Title: title,
 		Done:  false,
 	}
 
@@ -58,13 +65,17 @@ func (s *TodoServer) DeleteTodo(ctx context.Context, req *todov1.DeleteTodoReque
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, exists := s.todos[req.GetId()]
-	if !exists {
-		// 存在しなくても false で返すだけ（エラーにはしない）
-		return &todov1.DeleteTodoResponse{Ok: false}, nil
+	id := req.GetId()
+	if id == 0 {
+		return nil, status.Error(codes.InvalidArgument, "id must be non-zero")
 	}
 
-	delete(s.todos, req.GetId())
+	_, exists := s.todos[id]
+	if !exists {
+		return nil, status.Error(codes.NotFound, "todo not found")
+	}
+
+	delete(s.todos, id)
 
 	return &todov1.DeleteTodoResponse{Ok: true}, nil
 }

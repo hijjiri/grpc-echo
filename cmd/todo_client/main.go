@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -43,6 +44,10 @@ func main() {
 			Title: *title,
 		})
 		if err != nil {
+			st, ok := status.FromError(err)
+			if ok {
+				log.Fatalf("CreateTodo failed: code=%s msg=%s", st.Code(), st.Message())
+			}
 			log.Fatalf("CreateTodo failed: %v", err)
 		}
 		fmt.Printf("created: id=%d title=%s done=%v\n", res.GetId(), res.GetTitle(), res.GetDone())
@@ -69,6 +74,10 @@ func main() {
 			Id: *id,
 		})
 		if err != nil {
+			st, ok := status.FromError(err)
+			if ok {
+				log.Fatalf("DeleteTodo failed: code=%s msg=%s", st.Code(), st.Message())
+			}
 			log.Fatalf("DeleteTodo failed: %v", err)
 		}
 		fmt.Printf("delete result: ok=%v\n", res.GetOk())
