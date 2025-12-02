@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package todo.v1;
+
+option go_package = "github.com/hijjiri/grpc-echo/api/todo/v1;todov1";
+
+message Todo {
+  int64 id = 1;
+  string title = 2;
+  bool done = 3;
+}
+
+message CreateTodoRequest {
+  string title = 1;
+}
+
+message ListTodosRequest {
+}
+
+message ListTodosResponse {
+  repeated Todo todos = 1;
+}
+
+message DeleteTodoRequest {
+  int64 id = 1;
+}
+
+message DeleteTodoResponse {
+  bool ok = 1;
+}
+
+service TodoService {
+  rpc CreateTodo (CreateTodoRequest) returns (Todo);
+  rpc ListTodos (ListTodosRequest) returns (ListTodosResponse);
+  rpc DeleteTodo (DeleteTodoRequest) returns (DeleteTodoResponse);
+}
