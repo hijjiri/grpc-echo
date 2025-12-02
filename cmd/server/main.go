@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	echov1 "github.com/hijjiri/grpc-echo/api/echo/v1"
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
@@ -50,11 +51,22 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := db.Ping(); err != nil {
-		log.Fatalf("failed to ping db: %v", err)
+	// DB 起動待ちのリトライ（最大 20 回 = 20秒）
+	const maxAttempts = 20
+	var pingErr error
+	for i := 1; i <= maxAttempts; i++ {
+		pingErr = db.Ping()
+		if pingErr == nil {
+			log.Println("connected to MySQL:", dbHost, dbPort, dbName)
+			break
+		}
+		log.Printf("failed to ping db (attempt %d/%d): %v", i, maxAttempts, pingErr)
+		time.Sleep(1 * time.Second)
 	}
 
-	log.Println("connected to MySQL:", dbHost, dbPort, dbName)
+	if pingErr != nil {
+		log.Fatalf("failed to ping db after %d attempts: %v", maxAttempts, pingErr)
+	}
 
 	// --- gRPC ---
 	lis, err := net.Listen("tcp", ":50051")
