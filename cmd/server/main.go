@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	echov1 "github.com/hijjiri/grpc-echo/api/echo/v1"
@@ -62,7 +66,6 @@ func main() {
 	if err != nil {
 		logger.Fatal("failed to open db", zap.Error(err))
 	}
-	defer db.Close()
 
 	// DB 起動待ち
 	const maxAttempts = 20
@@ -125,11 +128,51 @@ func main() {
 		logger.Fatal("failed to listen", zap.Error(err))
 	}
 
-	logger.Info("gRPC server is starting",
-		zap.String("addr", ":50051"),
-	)
+	// OS シグナルを受け取るコンテキスト
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if err := grpcServer.Serve(lis); err != nil {
-		logger.Fatal("failed to serve", zap.Error(err))
+	// サーバ起動
+	go func() {
+		logger.Info("gRPC server is starting",
+			zap.String("addr", ":50051"),
+		)
+
+		if err := grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			// GracefulStop のときは ErrServerStopped が返るので、それ以外だけエラー扱い
+			logger.Error("gRPC server stopped with error", zap.Error(err))
+		}
+	}()
+
+	// ---- ここから Shutdown 処理 ----
+
+	// シグナルを待つ（Ctrl+C や SIGTERM）
+	<-ctx.Done()
+	logger.Info("shutdown signal received")
+
+	// 新規リクエスト受付を止めて、実行中 RPC の終了を待つ
+	stopped := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(stopped)
+	}()
+
+	// 一定時間待っても終わらなければ強制終了
+	const shutdownTimeout = 10 * time.Second
+	select {
+	case <-stopped:
+		logger.Info("gRPC server graceful stop completed")
+	case <-time.After(shutdownTimeout):
+		logger.Warn("graceful stop timeout; forcing stop")
+		grpcServer.Stop()
 	}
+
+	// DB クローズ（defer db.Close() を消して、ここで明示的に）
+	if err := db.Close(); err != nil {
+		logger.Warn("failed to close db", zap.Error(err))
+	} else {
+		logger.Info("db connection closed")
+	}
+
+	logger.Info("server shutdown completed")
 }
