@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"time"
@@ -25,6 +24,8 @@ import (
 
 	// Echo は既存の internal/server のまま利用
 	"github.com/hijjiri/grpc-echo/internal/server"
+
+	"go.uber.org/zap"
 )
 
 func getenv(key, def string) string {
@@ -35,6 +36,11 @@ func getenv(key, def string) string {
 }
 
 func main() {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic(fmt.Sprintf("failed to init logger: %v", err))
+	}
+	defer logger.Sync()
 
 	// --- DB 接続 ---
 	dbHost := getenv("DB_HOST", "127.0.0.1")
@@ -45,12 +51,16 @@ func main() {
 
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4&loc=Local",
-		dbUser, dbPass, dbHost, dbPort, dbName,
+		dbUser,
+		dbPass,
+		dbHost,
+		dbPort,
+		dbName,
 	)
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		log.Fatalf("failed to open db: %v", err)
+		logger.Fatal("failed to open db", zap.Error(err))
 	}
 	defer db.Close()
 
@@ -59,14 +69,25 @@ func main() {
 	var pingErr error
 	for i := 1; i <= maxAttempts; i++ {
 		if pingErr = db.Ping(); pingErr == nil {
-			log.Println("connected to MySQL:", dbHost, dbPort, dbName)
+			logger.Info("connected to MySQL",
+				zap.String("host", dbHost),
+				zap.String("port", dbPort),
+				zap.String("db", dbName),
+			)
 			break
 		}
-		log.Printf("failed to ping db (attempt %d/%d): %v", i, maxAttempts, pingErr)
+		logger.Warn("failed to ping db",
+			zap.Int("attempt", i),
+			zap.Int("maxAttempts", maxAttempts),
+			zap.Error(pingErr),
+		)
 		time.Sleep(time.Second)
 	}
 	if pingErr != nil {
-		log.Fatalf("failed to ping db after %d attempts: %v", maxAttempts, pingErr)
+		logger.Fatal("failed to ping db after max attempts",
+			zap.Int("maxAttempts", maxAttempts),
+			zap.Error(pingErr),
+		)
 	}
 
 	// --- gRPC サーバ構築 ---
@@ -94,12 +115,14 @@ func main() {
 	// --- 起動 ---
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		logger.Fatal("failed to listen", zap.Error(err))
 	}
 
-	log.Println("gRPC server is running on :50051 (Echo + Todo + Health + MySQL)")
+	logger.Info("gRPC server is starting",
+		zap.String("addr", ":50051"),
+	)
 
 	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		logger.Fatal("failed to serve", zap.Error(err))
 	}
 }
