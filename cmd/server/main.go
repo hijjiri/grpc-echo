@@ -58,6 +58,7 @@ func main() {
 	defer logger.Sync()
 
 	ctx := context.Background()
+
 	// Tracer
 	tp, err := initTracer(ctx, logger)
 	if err != nil {
@@ -71,7 +72,7 @@ func main() {
 		}
 	}()
 
-	// 🔹 Metrics を初期化
+	// Metrics を初期化
 	mp, metricsSrv, err := initMetrics(logger)
 	if err != nil {
 		logger.Fatal("failed to init metrics", zap.Error(err))
