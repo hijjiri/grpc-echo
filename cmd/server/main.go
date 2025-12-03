@@ -24,7 +24,9 @@ import (
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
 	mysqlrepo "github.com/hijjiri/grpc-echo/internal/infrastructure/mysql"
 	grpcadapter "github.com/hijjiri/grpc-echo/internal/interface/grpc"
-	"github.com/hijjiri/grpc-echo/internal/server"
+
+	// "github.com/hijjiri/grpc-echo/internal/server"
+	echo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/echo"
 	todo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/todo"
 
 	"go.opentelemetry.io/otel"
@@ -149,8 +151,10 @@ func main() {
 		),
 	)
 
-	// Echo Service
-	echov1.RegisterEchoServiceServer(grpcServer, server.NewEchoServer())
+	// Echo Service（クリーンアーキ版）
+	echoUC := echo_usecase.New(logger)
+	echoHandler := grpcadapter.NewEchoHandler(echoUC)
+	echov1.RegisterEchoServiceServer(grpcServer, echoHandler)
 
 	// Todo Service（クリーンアーキ）
 	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db, logger)
