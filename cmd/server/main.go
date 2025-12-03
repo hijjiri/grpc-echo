@@ -1,4 +1,3 @@
-// cmd/server/main.go
 package main
 
 import (
@@ -11,14 +10,21 @@ import (
 
 	echov1 "github.com/hijjiri/grpc-echo/api/echo/v1"
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
-	"github.com/hijjiri/grpc-echo/internal/server"
-	todopkg "github.com/hijjiri/grpc-echo/internal/todo"
 
 	_ "github.com/go-sql-driver/mysql"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+
+	// クリーンアーキの構成
+	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
+	mysqlrepo "github.com/hijjiri/grpc-echo/internal/infrastructure/mysql"
+	grpcadapter "github.com/hijjiri/grpc-echo/internal/interface/grpc"
+	todo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/todo"
+
+	// Echo は既存の internal/server のまま利用
+	"github.com/hijjiri/grpc-echo/internal/server"
 )
 
 func getenv(key, def string) string {
@@ -29,7 +35,8 @@ func getenv(key, def string) string {
 }
 
 func main() {
-	// --- DB 接続設定 ---
+
+	// --- DB 接続 ---
 	dbHost := getenv("DB_HOST", "127.0.0.1")
 	dbPort := getenv("DB_PORT", "3306")
 	dbUser := getenv("DB_USER", "app")
@@ -38,11 +45,7 @@ func main() {
 
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4&loc=Local",
-		dbUser,
-		dbPass,
-		dbHost,
-		dbPort,
-		dbName,
+		dbUser, dbPass, dbHost, dbPort, dbName,
 	)
 
 	db, err := sql.Open("mysql", dsn)
@@ -51,53 +54,52 @@ func main() {
 	}
 	defer db.Close()
 
-	// DB 起動待ちのリトライ（最大 20 回 = 20秒）
+	// DB 起動待ち
 	const maxAttempts = 20
 	var pingErr error
 	for i := 1; i <= maxAttempts; i++ {
-		pingErr = db.Ping()
-		if pingErr == nil {
+		if pingErr = db.Ping(); pingErr == nil {
 			log.Println("connected to MySQL:", dbHost, dbPort, dbName)
 			break
 		}
 		log.Printf("failed to ping db (attempt %d/%d): %v", i, maxAttempts, pingErr)
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Second)
 	}
-
 	if pingErr != nil {
 		log.Fatalf("failed to ping db after %d attempts: %v", maxAttempts, pingErr)
 	}
 
-	// --- gRPC ---
+	// --- gRPC サーバ構築 ---
+	grpcServer := grpc.NewServer()
+
+	// Echo Service
+	echov1.RegisterEchoServiceServer(grpcServer, server.NewEchoServer())
+
+	// Todo Service（クリーンアーキ）
+	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db)
+	uc := todo_usecase.New(repo)
+	handler := grpcadapter.NewTodoHandler(uc)
+	todov1.RegisterTodoServiceServer(grpcServer, handler)
+
+	// Healthチェック
+	healthServer := health.NewServer()
+	healthpb.RegisterHealthServer(grpcServer, healthServer)
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	healthServer.SetServingStatus(echov1.EchoService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
+	healthServer.SetServingStatus(todov1.TodoService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
+
+	// Reflection（grpcurl等で使える）
+	reflection.Register(grpcServer)
+
+	// --- 起動 ---
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	log.Println("gRPC server is running on :50051 (Echo + Todo + Health + MySQL)")
 
-	// Echo
-	echov1.RegisterEchoServiceServer(s, server.NewEchoServer())
-
-	// Todo: Repository 経由で MySQL 実装を注入
-	todoRepo := todopkg.NewMySQLTodoRepository(db)
-	todoServer := todopkg.NewTodoServer(todoRepo)
-	todov1.RegisterTodoServiceServer(s, todoServer)
-
-	// Health
-	healthServer := health.NewServer()
-	healthpb.RegisterHealthServer(s, healthServer)
-
-	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
-	healthServer.SetServingStatus(echov1.EchoService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
-	healthServer.SetServingStatus(todov1.TodoService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
-
-	// Reflection
-	reflection.Register(s)
-
-	log.Println("gRPC server (Echo + Todo + Health + MySQL) listening on :50051")
-
-	if err := s.Serve(lis); err != nil {
+	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
 }
