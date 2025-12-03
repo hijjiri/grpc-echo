@@ -30,5 +30,15 @@ services:
       - mysql-data:/var/lib/mysql
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
+  jaeger:                       # ← services の中にインデントして入れる
+    image: jaegertracing/all-in-one:1.58
+    container_name: grpc-jaeger
+    ports:
+      - "16686:16686"   # Web UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP（今回は使わない）
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
 volumes:
   mysql-data:

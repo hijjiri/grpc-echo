@@ -31,13 +31,14 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"
 
 	otelgrpc "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+
+	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 )
 
 func getenv(key, def string) string {
@@ -204,16 +205,16 @@ func main() {
 }
 
 func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvider, error) {
-	// stdout に span を吐く exporter
-	exp, err := stdouttrace.New(
-		stdouttrace.WithPrettyPrint(),
+	// OTLP gRPC Exporter を Jaeger（または Collector）に送る
+	exp, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithEndpoint("localhost:4317"),
+		otlptracegrpc.WithInsecure(),
 	)
 	if err != nil {
-		logger.Error("failed to create stdout exporter", zap.Error(err))
+		logger.Error("failed to create otlp exporter", zap.Error(err))
 		return nil, err
 	}
 
-	// このサービスの情報
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			attribute.String("service.name", "grpc-echo"),
@@ -231,7 +232,6 @@ func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvid
 	)
 
 	otel.SetTracerProvider(tp)
-	// HTTP/gRPC で使われる標準のプロパゲータ
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	return tp, nil
