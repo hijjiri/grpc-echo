@@ -91,7 +91,14 @@ func main() {
 	}
 
 	// --- gRPC サーバ構築 ---
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			grpcadapter.NewLoggingUnaryInterceptor(logger),
+		),
+		grpc.ChainStreamInterceptor(
+			grpcadapter.NewLoggingStreamInterceptor(logger),
+		),
+	)
 
 	// Echo Service
 	echov1.RegisterEchoServiceServer(grpcServer, server.NewEchoServer())
