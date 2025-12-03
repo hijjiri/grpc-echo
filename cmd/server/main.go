@@ -29,7 +29,15 @@ import (
 	// Echo は既存の internal/server のまま利用
 	"github.com/hijjiri/grpc-echo/internal/server"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"
+
+	otelgrpc "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 )
 
 func getenv(key, def string) string {
@@ -45,6 +53,20 @@ func main() {
 		panic(fmt.Sprintf("failed to init logger: %v", err))
 	}
 	defer logger.Sync()
+
+	ctx := context.Background()
+	tp, err := initTracer(ctx, logger)
+	if err != nil {
+		logger.Fatal("failed to init tracer", zap.Error(err))
+	}
+	// シャットダウン時にフラッシュ
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("failed to shutdown tracer provider", zap.Error(err))
+		}
+	}()
 
 	// --- DB 接続 ---
 	dbHost := getenv("DB_HOST", "127.0.0.1")
@@ -95,6 +117,10 @@ func main() {
 
 	// --- gRPC サーバ構築 ---
 	grpcServer := grpc.NewServer(
+		// OpenTelemetry: StatsHandler で計装
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+
+		// いつものログインターセプタ
 		grpc.ChainUnaryInterceptor(
 			grpcadapter.NewLoggingUnaryInterceptor(logger),
 		),
@@ -175,4 +201,38 @@ func main() {
 	}
 
 	logger.Info("server shutdown completed")
+}
+
+func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvider, error) {
+	// stdout に span を吐く exporter
+	exp, err := stdouttrace.New(
+		stdouttrace.WithPrettyPrint(),
+	)
+	if err != nil {
+		logger.Error("failed to create stdout exporter", zap.Error(err))
+		return nil, err
+	}
+
+	// このサービスの情報
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			attribute.String("service.name", "grpc-echo"),
+			attribute.String("service.version", "1.0.0"),
+		),
+	)
+	if err != nil {
+		logger.Error("failed to create otel resource", zap.Error(err))
+		return nil, err
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(res),
+	)
+
+	otel.SetTracerProvider(tp)
+	// HTTP/gRPC で使われる標準のプロパゲータ
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	return tp, nil
 }
