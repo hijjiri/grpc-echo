@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,14 +21,11 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	// クリーンアーキの構成
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
 	mysqlrepo "github.com/hijjiri/grpc-echo/internal/infrastructure/mysql"
 	grpcadapter "github.com/hijjiri/grpc-echo/internal/interface/grpc"
-	todo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/todo"
-
-	// Echo は既存の internal/server のまま利用
 	"github.com/hijjiri/grpc-echo/internal/server"
+	todo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/todo"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -37,8 +35,12 @@ import (
 	"go.uber.org/zap"
 
 	otelgrpc "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-
 	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 func getenv(key, def string) string {
@@ -56,16 +58,32 @@ func main() {
 	defer logger.Sync()
 
 	ctx := context.Background()
+	// Tracer
 	tp, err := initTracer(ctx, logger)
 	if err != nil {
 		logger.Fatal("failed to init tracer", zap.Error(err))
 	}
-	// シャットダウン時にフラッシュ
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := tp.Shutdown(shutdownCtx); err != nil {
 			logger.Warn("failed to shutdown tracer provider", zap.Error(err))
+		}
+	}()
+
+	// 🔹 Metrics を初期化
+	mp, metricsSrv, err := initMetrics(logger)
+	if err != nil {
+		logger.Fatal("failed to init metrics", zap.Error(err))
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := mp.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("failed to shutdown meter provider", zap.Error(err))
+		}
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+			logger.Warn("failed to shutdown metrics http server", zap.Error(err))
 		}
 	}()
 
@@ -235,4 +253,45 @@ func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvid
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	return tp, nil
+}
+
+func initMetrics(logger *zap.Logger) (*sdkmetric.MeterProvider, *http.Server, error) {
+	// Prometheus用レジストリ
+	reg := prometheus.NewRegistry()
+
+	// OTEL → Prometheus Exporter
+	exp, err := otelprom.New(
+		otelprom.WithRegisterer(reg),
+	)
+	if err != nil {
+		logger.Error("failed to create prometheus exporter", zap.Error(err))
+		return nil, nil, err
+	}
+
+	// MeterProvider 作成
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(exp),
+		// 必要なら Resource を付けたい場合:
+		// sdkmetric.WithResource(resource.Default()),
+	)
+	otel.SetMeterProvider(mp)
+
+	// /metrics を公開する HTTP サーバ
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+
+	srv := &http.Server{
+		Addr:    ":9464", // Prometheus がよく使うポート
+		Handler: mux,
+	}
+
+	// バックグラウンドで起動
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("metrics http server error", zap.Error(err))
+		}
+	}()
+
+	logger.Info("metrics server started", zap.String("addr", srv.Addr))
+	return mp, srv, nil
 }
