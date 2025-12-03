@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "grpc-echo"
+    static_configs:
+      # docker-compose 内での grpc-server のサービス名:ポート
+      - targets: ["grpc-echo-server:9464"]
