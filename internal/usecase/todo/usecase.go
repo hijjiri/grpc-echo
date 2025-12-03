@@ -21,6 +21,7 @@ type Usecase interface {
 	Create(ctx context.Context, title string) (*domain_todo.Todo, error)
 	List(ctx context.Context) ([]*domain_todo.Todo, error)
 	Delete(ctx context.Context, id int64) error
+	Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error)
 }
 
 // ===== 実装 =====
@@ -66,4 +67,21 @@ func (u *usecase) Delete(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (u *usecase) Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error) {
+	if id <= 0 {
+		return nil, ErrInvalidID
+	}
+	if title == "" {
+		return nil, ErrEmptyTitle
+	}
+
+	t := &domain_todo.Todo{
+		ID:    id,
+		Title: title,
+		Done:  done,
+	}
+
+	return u.repo.Update(ctx, t)
 }

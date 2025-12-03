@@ -52,6 +52,14 @@ func (h *TodoHandler) DeleteTodo(ctx context.Context, req *todov1.DeleteTodoRequ
 	return &todov1.DeleteTodoResponse{}, nil
 }
 
+func (h *TodoHandler) UpdateTodo(ctx context.Context, req *todov1.UpdateTodoRequest) (*todov1.Todo, error) {
+	t, err := h.uc.Update(ctx, req.GetId(), req.GetTitle(), req.GetDone())
+	if err != nil {
+		return nil, toGRPCError(err)
+	}
+	return toProtoTodo(t), nil
+}
+
 // --- converter (domain -> proto) ---
 func toProtoTodo(t *domain_todo.Todo) *todov1.Todo {
 	return &todov1.Todo{

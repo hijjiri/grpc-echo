@@ -3,11 +3,11 @@ package server
 
 import (
 	"context"
-	"log"
 
 	echov1 "github.com/hijjiri/grpc-echo/api/echo/v1"
 )
 
+// EchoServer はシンプルなエコー用 gRPC サーバー
 type EchoServer struct {
 	echov1.UnimplementedEchoServiceServer
 }
@@ -17,10 +17,7 @@ func NewEchoServer() *EchoServer {
 }
 
 func (s *EchoServer) Echo(ctx context.Context, req *echov1.EchoRequest) (*echov1.EchoResponse, error) {
-	msg := req.GetMessage()
-	log.Printf("received: %s", msg)
-
 	return &echov1.EchoResponse{
-		Message: msg,
+		Message: req.GetMessage(),
 	}, nil
 }

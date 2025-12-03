@@ -29,8 +29,15 @@ message DeleteTodoResponse {
   bool ok = 1;
 }
 
+message UpdateTodoRequest {
+  int64 id = 1;
+  string title = 2;
+  bool done = 3;
+}
+
 service TodoService {
   rpc CreateTodo (CreateTodoRequest) returns (Todo);
   rpc ListTodos (ListTodosRequest) returns (ListTodosResponse);
   rpc DeleteTodo (DeleteTodoRequest) returns (DeleteTodoResponse);
+  rpc UpdateTodo (UpdateTodoRequest) returns (Todo);
 }

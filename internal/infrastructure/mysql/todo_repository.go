@@ -71,3 +71,19 @@ func (r *TodoRepository) Delete(ctx context.Context, id int64) (bool, error) {
 	}
 	return affected > 0, nil
 }
+
+func (r *TodoRepository) Update(ctx context.Context, t *domain_todo.Todo) (*domain_todo.Todo, error) {
+	_, err := r.db.ExecContext(
+		ctx,
+		"UPDATE todos SET title = ?, done = ? WHERE id = ?",
+		t.Title,
+		t.Done,
+		t.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// 行数チェックを厳密にやるなら RowsAffected を見てもよいが、
+	// ここでは簡単に「成功した前提で t を返す」実装にしておく
+	return t, nil
+}

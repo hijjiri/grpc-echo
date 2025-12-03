@@ -16,9 +16,10 @@ import (
 
 func main() {
 	addr := flag.String("addr", "localhost:50051", "gRPC server address")
-	mode := flag.String("mode", "list", "mode: create | list | delete")
-	title := flag.String("title", "", "title for create")
-	id := flag.Int64("id", 0, "id for delete")
+	mode := flag.String("mode", "list", "mode: create | list | delete | update")
+	title := flag.String("title", "", "title for create/update")
+	id := flag.Int64("id", 0, "todo id (delete/update 共通)")
+	done := flag.Bool("done", false, "done flag (update 用)")
 	flag.Parse()
 
 	conn, err := grpc.Dial(
@@ -81,6 +82,18 @@ func main() {
 			log.Fatalf("DeleteTodo failed: %v", err)
 		}
 		fmt.Printf("delete result: ok=%v\n", res.GetOk())
+
+	case "update":
+		req := &todov1.UpdateTodoRequest{
+			Id:    *id,
+			Title: *title,
+			Done:  *done,
+		}
+		resp, err := client.UpdateTodo(ctx, req)
+		if err != nil {
+			log.Fatalf("UpdateTodo error: %v", err)
+		}
+		fmt.Printf("updated: id=%d title=%s done=%v\n", resp.GetId(), resp.GetTitle(), resp.GetDone())
 
 	default:
 		log.Fatalf("unknown mode: %s", *mode)
