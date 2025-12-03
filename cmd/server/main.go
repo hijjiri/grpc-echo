@@ -104,8 +104,8 @@ func main() {
 	echov1.RegisterEchoServiceServer(grpcServer, server.NewEchoServer())
 
 	// Todo Service（クリーンアーキ）
-	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db)
-	uc := todo_usecase.New(repo)
+	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db, logger)
+	uc := todo_usecase.New(repo, logger)
 	handler := grpcadapter.NewTodoHandler(uc)
 	todov1.RegisterTodoServiceServer(grpcServer, handler)
 

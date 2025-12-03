@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
+	"go.uber.org/zap"
 )
 
 // ===== エラー定数（Handler側からも使う） =====
@@ -27,16 +28,25 @@ type Usecase interface {
 // ===== 実装 =====
 
 type usecase struct {
-	repo domain_todo.Repository
+	repo   domain_todo.Repository
+	logger *zap.Logger
 }
 
-func New(repo domain_todo.Repository) Usecase {
-	return &usecase{repo: repo}
+func New(repo domain_todo.Repository, logger *zap.Logger) Usecase {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &usecase{repo: repo, logger: logger}
+}
+
+func (u *usecase) log() *zap.Logger {
+	return u.logger
 }
 
 // Create ユースケース
 func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, error) {
 	if title == "" {
+		u.log().Warn("failed to create todo: empty title")
 		return nil, ErrEmptyTitle
 	}
 
@@ -45,12 +55,32 @@ func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, 
 		Done:  false,
 	}
 
-	return u.repo.Create(ctx, t)
+	created, err := u.repo.Create(ctx, t)
+	if err != nil {
+		u.log().Error("failed to create todo in repo",
+			zap.String("title", title),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+
+	u.log().Info("todo created (usecase)",
+		zap.Int64("id", created.ID),
+		zap.String("title", created.Title),
+	)
+
+	return created, nil
 }
 
 // List ユースケース
 func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
-	return u.repo.List(ctx)
+	list, err := u.repo.List(ctx)
+	if err != nil {
+		u.log().Error("failed to list todos", zap.Error(err))
+		return nil, err
+	}
+	u.log().Info("todos listed (usecase)", zap.Int("count", len(list)))
+	return list, nil
 }
 
 // Delete ユースケース

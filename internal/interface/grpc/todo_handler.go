@@ -71,15 +71,18 @@ func toProtoTodo(t *domain_todo.Todo) *todov1.Todo {
 
 // --- error mapper ---
 func toGRPCError(err error) error {
-	// Usecase 側でエラーをエクスポートしている場合はここで分岐
 	switch {
 	case errors.Is(err, todo_usecase.ErrEmptyTitle):
 		return status.Error(codes.InvalidArgument, "title is required")
+
 	case errors.Is(err, todo_usecase.ErrInvalidID):
 		return status.Error(codes.InvalidArgument, "invalid id")
+
 	case errors.Is(err, todo_usecase.ErrNotFound):
 		return status.Error(codes.NotFound, "todo not found")
+
 	default:
-		return status.Error(codes.Internal, err.Error())
+		// Internal詳細はログ側にだけ残す（handler や interceptor で）
+		return status.Error(codes.Internal, "internal error")
 	}
 }
