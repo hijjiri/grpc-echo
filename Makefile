@@ -74,9 +74,11 @@ tree:
 	tree -L 3
 
 # ---------- Testing ----------
-.PHONY: test
+.PHONY: test build
 test:
 	$(GO) test ./...
+build:
+	$(GO) build ./...
 
 # ---------- DB Utility ----------
 .PHONY: db
