@@ -42,7 +42,7 @@ service TodoService {
   rpc CreateTodo (CreateTodoRequest) returns (Todo) {
     option (google.api.http) = {
       post: "/v1/todos"
-      body: "*"     // JSON 全体を CreateTodoRequest にマッピング
+      body: "*"          // リクエスト全体を JSON ボディとして受ける
     };
   }
 
@@ -64,7 +64,7 @@ service TodoService {
   rpc UpdateTodo (UpdateTodoRequest) returns (Todo) {
     option (google.api.http) = {
       patch: "/v1/todos/{id}"
-      body: "*"   // id は URL の {id}、title/done は JSON body から
+      body: "*"          // title/done を JSON で渡す
     };
   }
 }

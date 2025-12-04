@@ -23,6 +23,14 @@ proto:
 		  $$dir/*.proto; \
 	done
 
+	@echo "==> Generating gRPC-Gateway..."
+	# Todoサービスだけ Gateway を生成
+	protoc \
+	  -I . \
+	  -I third_party \
+	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
+	  api/todo/v1/todo.proto
+
 # ---------- Run (Local) ----------
 .PHONY: run-server run-client run-todo
 run-server:
@@ -100,3 +108,7 @@ health:
 
 evans:
 	evans --host localhost --port 50051 -r repl
+
+.PHONY: run-gateway
+run-gateway:
+	$(GO_RUN) ./cmd/http_gateway
