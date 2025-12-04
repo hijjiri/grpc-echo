@@ -4,6 +4,8 @@ package todo.v1;
 
 option go_package = "github.com/hijjiri/grpc-echo/api/todo/v1;todov1";
 
+import "google/api/annotations.proto";
+
 message Todo {
   int64 id = 1;
   string title = 2;
@@ -36,8 +38,33 @@ message UpdateTodoRequest {
 }
 
 service TodoService {
-  rpc CreateTodo (CreateTodoRequest) returns (Todo);
-  rpc ListTodos (ListTodosRequest) returns (ListTodosResponse);
-  rpc DeleteTodo (DeleteTodoRequest) returns (DeleteTodoResponse);
-  rpc UpdateTodo (UpdateTodoRequest) returns (Todo);
+  // POST /v1/todos
+  rpc CreateTodo (CreateTodoRequest) returns (Todo) {
+    option (google.api.http) = {
+      post: "/v1/todos"
+      body: "*"     // JSON 全体を CreateTodoRequest にマッピング
+    };
+  }
+
+  // GET /v1/todos
+  rpc ListTodos (ListTodosRequest) returns (ListTodosResponse) {
+    option (google.api.http) = {
+      get: "/v1/todos"
+    };
+  }
+
+  // DELETE /v1/todos/{id}
+  rpc DeleteTodo (DeleteTodoRequest) returns (DeleteTodoResponse) {
+    option (google.api.http) = {
+      delete: "/v1/todos/{id}"
+    };
+  }
+
+  // PATCH /v1/todos/{id}
+  rpc UpdateTodo (UpdateTodoRequest) returns (Todo) {
+    option (google.api.http) = {
+      patch: "/v1/todos/{id}"
+      body: "*"   // id は URL の {id}、title/done は JSON body から
+    };
+  }
 }

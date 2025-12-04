@@ -10,15 +10,17 @@ ARGS      ?=
 # プロトファイルディレクトリ自動検出
 PROTO_DIRS := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
 
-# ---------- Proto ----------
 .PHONY: proto
 proto:
 	@echo "==> Generating protobufs..."
 	@for dir in $(PROTO_DIRS); do \
 		echo " -> $$dir"; \
-		protoc --go_out=paths=source_relative:. \
-		       --go-grpc_out=paths=source_relative:. \
-		       $$dir/*.proto; \
+		protoc \
+		  -I . \
+		  -I third_party \
+		  --go_out=paths=source_relative:. \
+		  --go-grpc_out=paths=source_relative:. \
+		  $$dir/*.proto; \
 	done
 
 # ---------- Run (Local) ----------

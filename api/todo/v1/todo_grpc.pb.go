@@ -29,9 +29,13 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type TodoServiceClient interface {
+	// POST /v1/todos
 	CreateTodo(ctx context.Context, in *CreateTodoRequest, opts ...grpc.CallOption) (*Todo, error)
+	// GET /v1/todos
 	ListTodos(ctx context.Context, in *ListTodosRequest, opts ...grpc.CallOption) (*ListTodosResponse, error)
+	// DELETE /v1/todos/{id}
 	DeleteTodo(ctx context.Context, in *DeleteTodoRequest, opts ...grpc.CallOption) (*DeleteTodoResponse, error)
+	// PATCH /v1/todos/{id}
 	UpdateTodo(ctx context.Context, in *UpdateTodoRequest, opts ...grpc.CallOption) (*Todo, error)
 }
 
@@ -83,9 +87,13 @@ func (c *todoServiceClient) UpdateTodo(ctx context.Context, in *UpdateTodoReques
 // All implementations must embed UnimplementedTodoServiceServer
 // for forward compatibility
 type TodoServiceServer interface {
+	// POST /v1/todos
 	CreateTodo(context.Context, *CreateTodoRequest) (*Todo, error)
+	// GET /v1/todos
 	ListTodos(context.Context, *ListTodosRequest) (*ListTodosResponse, error)
+	// DELETE /v1/todos/{id}
 	DeleteTodo(context.Context, *DeleteTodoRequest) (*DeleteTodoResponse, error)
+	// PATCH /v1/todos/{id}
 	UpdateTodo(context.Context, *UpdateTodoRequest) (*Todo, error)
 	mustEmbedUnimplementedTodoServiceServer()
 }
