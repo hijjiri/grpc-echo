@@ -16,29 +16,33 @@ spec:
         - name: grpc-echo
           image: grpc-echo:latest
           imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50051  # gRPC
+            - containerPort: 9464   # metrics (Prometheus)
           env:
             - name: DB_HOST
-              value: mysql
+              value: "mysql"        # MySQL Service 名
             - name: DB_PORT
               value: "3306"
             - name: DB_USER
-              value: app
+              value: "root"         # mysql.yaml の設定に合わせて root/root
             - name: DB_PASSWORD
-              value: app
+              value: "root"
             - name: DB_NAME
-              value: grpcdb
-          ports:
-            - containerPort: 50051
-
+              value: "grpcdb"
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: grpc-echo
 spec:
+  type: ClusterIP
   selector:
     app: grpc-echo
   ports:
-    - port: 50051
+    - name: grpc
+      port: 50051
       targetPort: 50051
-      protocol: TCP
+    - name: metrics
+      port: 9464
+      targetPort: 9464

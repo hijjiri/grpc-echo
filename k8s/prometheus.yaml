@@ -47,10 +47,10 @@ kind: Service
 metadata:
   name: prometheus
 spec:
-  type: NodePort          # ← Grafana から参照するため必須！
+  type: NodePort
   selector:
     app: prometheus
   ports:
     - port: 9090
       targetPort: 9090
-      nodePort: 30090     # ← 好きなポートでOK
+      nodePort: 30090   # kind なら http://localhost:30090 でアクセス
