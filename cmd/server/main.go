@@ -228,9 +228,12 @@ func main() {
 }
 
 func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvider, error) {
-	// OTLP gRPC Exporter を Jaeger（または Collector）に送る
-	exp, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint("localhost:4317"),
+	// 環境変数で Collector のエンドポイントを変えられるようにする
+	endpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
+
+	exp, err := otlptracegrpc.New(
+		ctx,
+		otlptracegrpc.WithEndpoint(endpoint), // 例: "otel-collector:4317"
 		otlptracegrpc.WithInsecure(),
 	)
 	if err != nil {
