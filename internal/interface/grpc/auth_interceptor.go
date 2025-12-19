@@ -13,44 +13,56 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Unary 用の認証インターセプタ
-func NewAuthUnaryInterceptor(
-	logger *zap.Logger,
-	authenticator auth.Authenticator,
-) grpc.UnaryServerInterceptor {
+func NewAuthUnaryInterceptor(a *auth.Authenticator, logger *zap.Logger) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
 		req interface{},
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (interface{}, error) {
+		// Health / Reflection は認証スキップ
+		if strings.HasPrefix(info.FullMethod, "/grpc.health.v1.Health/") ||
+			strings.HasPrefix(info.FullMethod, "/grpc.reflection.v1.") {
+			return handler(ctx, req)
+		}
+
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
+			logger.Info("no metadata in context")
 			return nil, status.Error(codes.Unauthenticated, "missing metadata")
 		}
 
-		values := md.Get("authorization")
-		if len(values) == 0 {
+		// gRPC の MD キーは小文字で持たれるので "authorization"
+		vals := md.Get("authorization")
+		if len(vals) == 0 {
+			logger.Info("missing authorization header", zap.Any("metadata", md))
 			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 
-		raw := strings.TrimSpace(values[0])
-		// "Bearer xxx" 形式ならプレフィックスを剥がす
-		lower := strings.ToLower(raw)
-		if strings.HasPrefix(lower, "bearer ") {
-			raw = strings.TrimSpace(raw[len("bearer "):])
-		}
+		raw := strings.TrimSpace(vals[0])
+		logger.Info("got authorization header", zap.String("raw", raw))
 
-		newCtx, err := authenticator.Authenticate(ctx, raw)
+		// "Bearer <token>" を素直にパース（大文字小文字は無視）
+		parts := strings.Fields(raw)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			logger.Info("invalid authorization header format", zap.String("raw", raw))
+			return nil, status.Error(codes.Unauthenticated, "invalid authorization header")
+		}
+		token := parts[1]
+
+		// JWT 検証
+		sub, err := a.ValidateToken(token)
 		if err != nil {
 			if errors.Is(err, auth.ErrInvalidToken) {
 				return nil, status.Error(codes.Unauthenticated, "invalid token")
 			}
-			logger.Error("authenticator error", zap.Error(err))
-			return nil, status.Error(codes.Internal, "auth internal error")
+			logger.Error("token validation error", zap.Error(err))
+			return nil, status.Error(codes.Internal, "internal auth error")
 		}
 
-		// 認証 OK → 次のハンドラへ
-		return handler(newCtx, req)
+		// 必要ならここで sub を context に詰めるが、今は未使用なのでスキップ
+		_ = sub
+
+		return handler(ctx, req)
 	}
 }

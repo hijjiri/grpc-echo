@@ -139,10 +139,12 @@ func main() {
 	}
 
 	// ---------- Authenticator & Interceptors ----------
-	authenticator := auth.NewAuthenticatorFromEnv(logger)
+	// authenticator := auth.NewAuthenticatorFromEnv(logger)
+	authSecret := getenv("AUTH_SECRET", "my-dev-secret-key")
+	authz := auth.NewAuthenticator(authSecret, logger)
 
 	unaryOpts := grpc.ChainUnaryInterceptor(
-		grpcadapter.NewAuthUnaryInterceptor(logger, authenticator),
+		grpcadapter.NewAuthUnaryInterceptor(authz, logger),
 		grpcadapter.NewLoggingUnaryInterceptor(logger),
 		// grpcadapter.NewErrorUnaryInterceptor(logger),
 	)

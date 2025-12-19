@@ -21,7 +21,7 @@ spec:
             - containerPort: 9464   # metrics (Prometheus)
           env:
             - name: DB_HOST
-              value: "mysql"        # MySQL Service 名
+              value: "mysql"
             - name: DB_PORT
               value: "3306"
             - name: DB_USER
@@ -35,7 +35,7 @@ spec:
               value: "otel-collector:4317"
 
             - name: AUTH_SECRET
-              value: "abc123"
+              value: "my-dev-secret-key"
 
 ---
 apiVersion: v1
