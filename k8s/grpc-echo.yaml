@@ -33,6 +33,10 @@ spec:
             
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "otel-collector:4317"
+
+            - name: AUTH_SECRET
+              value: "abc123"
+
 ---
 apiVersion: v1
 kind: Service

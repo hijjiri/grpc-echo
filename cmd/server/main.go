@@ -12,37 +12,37 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+
 	echov1 "github.com/hijjiri/grpc-echo/api/echo/v1"
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
 
-	_ "github.com/go-sql-driver/mysql"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
-
+	"github.com/hijjiri/grpc-echo/internal/auth"
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
 	mysqlrepo "github.com/hijjiri/grpc-echo/internal/infrastructure/mysql"
 	grpcadapter "github.com/hijjiri/grpc-echo/internal/interface/grpc"
-
-	// "github.com/hijjiri/grpc-echo/internal/server"
 	echo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/echo"
 	todo_usecase "github.com/hijjiri/grpc-echo/internal/usecase/todo"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+
 	"go.uber.org/zap"
 
-	otelgrpc "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
 func getenv(key, def string) string {
@@ -53,6 +53,7 @@ func getenv(key, def string) string {
 }
 
 func main() {
+	// ---------- Logger ----------
 	logger, err := zap.NewProduction()
 	if err != nil {
 		panic(fmt.Sprintf("failed to init logger: %v", err))
@@ -61,7 +62,7 @@ func main() {
 
 	ctx := context.Background()
 
-	// Tracer
+	// ---------- Tracer ----------
 	tp, err := initTracer(ctx, logger)
 	if err != nil {
 		logger.Fatal("failed to init tracer", zap.Error(err))
@@ -74,7 +75,7 @@ func main() {
 		}
 	}()
 
-	// Metrics を初期化
+	// ---------- Metrics ----------
 	mp, metricsSrv, err := initMetrics(logger)
 	if err != nil {
 		logger.Fatal("failed to init metrics", zap.Error(err))
@@ -90,7 +91,7 @@ func main() {
 		}
 	}()
 
-	// --- DB 接続 ---
+	// ---------- DB 接続 ----------
 	dbHost := getenv("DB_HOST", "127.0.0.1")
 	dbPort := getenv("DB_PORT", "3306")
 	dbUser := getenv("DB_USER", "app")
@@ -137,42 +138,48 @@ func main() {
 		)
 	}
 
-	// --- gRPC サーバ構築 ---
-	grpcServer := grpc.NewServer(
-		// OpenTelemetry: StatsHandler で計装
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	// ---------- Authenticator & Interceptors ----------
+	authenticator := auth.NewAuthenticatorFromEnv(logger)
 
-		// いつものログインターセプタ
-		grpc.ChainUnaryInterceptor(
-			grpcadapter.NewLoggingUnaryInterceptor(logger),
-		),
-		grpc.ChainStreamInterceptor(
-			grpcadapter.NewLoggingStreamInterceptor(logger),
-		),
+	unaryOpts := grpc.ChainUnaryInterceptor(
+		grpcadapter.NewAuthUnaryInterceptor(logger, authenticator),
+		grpcadapter.NewLoggingUnaryInterceptor(logger),
+		// grpcadapter.NewErrorUnaryInterceptor(logger),
 	)
 
-	// Echo Service（クリーンアーキ版）
+	streamOpts := grpc.ChainStreamInterceptor(
+		grpcadapter.NewLoggingStreamInterceptor(logger),
+		// grpcadapter.NewErrorStreamInterceptor(logger),
+	)
+
+	// ---------- gRPC Server ----------
+	grpcServer := grpc.NewServer(
+		unaryOpts,
+		streamOpts,
+	)
+
+	// ---------- Echo Service ----------
 	echoUC := echo_usecase.New(logger)
 	echoHandler := grpcadapter.NewEchoHandler(echoUC)
 	echov1.RegisterEchoServiceServer(grpcServer, echoHandler)
 
-	// Todo Service（クリーンアーキ）
+	// ---------- Todo Service ----------
 	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db, logger)
 	uc := todo_usecase.New(repo, logger)
 	handler := grpcadapter.NewTodoHandler(uc)
 	todov1.RegisterTodoServiceServer(grpcServer, handler)
 
-	// Healthチェック
+	// ---------- Health チェック ----------
 	healthServer := health.NewServer()
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	healthServer.SetServingStatus(echov1.EchoService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
 	healthServer.SetServingStatus(todov1.TodoService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
 
-	// Reflection（grpcurl等で使える）
+	// ---------- Reflection ----------
 	reflection.Register(grpcServer)
 
-	// --- 起動 ---
+	// ---------- gRPC Listen ----------
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		logger.Fatal("failed to listen", zap.Error(err))
@@ -194,20 +201,16 @@ func main() {
 		}
 	}()
 
-	// ---- ここから Shutdown 処理 ----
-
-	// シグナルを待つ（Ctrl+C や SIGTERM）
+	// ---------- Shutdown 処理 ----------
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
 
-	// 新規リクエスト受付を止めて、実行中 RPC の終了を待つ
 	stopped := make(chan struct{})
 	go func() {
 		grpcServer.GracefulStop()
 		close(stopped)
 	}()
 
-	// 一定時間待っても終わらなければ強制終了
 	const shutdownTimeout = 10 * time.Second
 	select {
 	case <-stopped:
@@ -217,7 +220,6 @@ func main() {
 		grpcServer.Stop()
 	}
 
-	// DB クローズ（defer db.Close() を消して、ここで明示的に）
 	if err := db.Close(); err != nil {
 		logger.Warn("failed to close db", zap.Error(err))
 	} else {
@@ -227,13 +229,13 @@ func main() {
 	logger.Info("server shutdown completed")
 }
 
+// ---------- Tracer 初期化 ----------
 func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvider, error) {
-	// 環境変数で Collector のエンドポイントを変えられるようにする
 	endpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
 
 	exp, err := otlptracegrpc.New(
 		ctx,
-		otlptracegrpc.WithEndpoint(endpoint), // 例: "otel-collector:4317"
+		otlptracegrpc.WithEndpoint(endpoint),
 		otlptracegrpc.WithInsecure(),
 	)
 	if err != nil {
@@ -263,6 +265,7 @@ func initTracer(ctx context.Context, logger *zap.Logger) (*sdktrace.TracerProvid
 	return tp, nil
 }
 
+// ---------- Metrics 初期化 ----------
 func initMetrics(logger *zap.Logger) (*sdkmetric.MeterProvider, *http.Server, error) {
 	// Prometheus用レジストリ
 	reg := prometheus.NewRegistry()
@@ -279,9 +282,8 @@ func initMetrics(logger *zap.Logger) (*sdkmetric.MeterProvider, *http.Server, er
 	// MeterProvider 作成
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(exp),
-		// 必要なら Resource を付けたい場合:
-		// sdkmetric.WithResource(resource.Default()),
 	)
+
 	otel.SetMeterProvider(mp)
 
 	// /metrics を公開する HTTP サーバ
