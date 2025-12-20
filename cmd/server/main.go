@@ -139,25 +139,23 @@ func main() {
 	}
 
 	// ---------- Authenticator & Interceptors ----------
-	// authenticator := auth.NewAuthenticatorFromEnv(logger)
+	// 認証の初期化
 	authSecret := getenv("AUTH_SECRET", "my-dev-secret-key")
-	authz := auth.NewAuthenticator(authSecret, logger)
+	authz := auth.NewAuthenticator(logger, authSecret)
 
-	unaryOpts := grpc.ChainUnaryInterceptor(
-		grpcadapter.NewAuthUnaryInterceptor(authz, logger),
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		grpcadapter.NewLoggingUnaryInterceptor(logger),
-		// grpcadapter.NewErrorUnaryInterceptor(logger),
-	)
+		grpcadapter.NewAuthUnaryInterceptor(logger, authz),
+	}
 
-	streamOpts := grpc.ChainStreamInterceptor(
+	streamInterceptors := []grpc.StreamServerInterceptor{
 		grpcadapter.NewLoggingStreamInterceptor(logger),
-		// grpcadapter.NewErrorStreamInterceptor(logger),
-	)
+	}
 
 	// ---------- gRPC Server ----------
 	grpcServer := grpc.NewServer(
-		unaryOpts,
-		streamOpts,
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainStreamInterceptor(streamInterceptors...),
 	)
 
 	// ---------- Echo Service ----------

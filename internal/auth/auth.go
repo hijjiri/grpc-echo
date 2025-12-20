@@ -2,34 +2,67 @@
 package auth
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 )
 
-// アプリ全体で使う Authenticator のラッパ
+// 認証失敗時に使う共通エラー
+var ErrInvalidToken = errors.New("invalid token")
+
+// JWT を検証するための構造体
 type Authenticator struct {
-	jwt    *JWTAuthenticator
 	logger *zap.Logger
+	secret []byte
 }
 
-func NewAuthenticator(secret string, logger *zap.Logger) *Authenticator {
+// コンストラクタ
+func NewAuthenticator(logger *zap.Logger, secret string) *Authenticator {
 	return &Authenticator{
-		jwt:    NewJWTAuthenticator(secret),
 		logger: logger,
+		secret: []byte(secret),
 	}
 }
 
-func (a *Authenticator) ValidateToken(raw string) (string, error) {
-	sub, err := a.jwt.Validate(raw)
+// Authorization ヘッダに載ってきた生のトークンを検証する
+// 正常なら subject(ここでは "sub" クレーム) を返す
+func (a *Authenticator) Authenticate(rawToken string) (string, error) {
+	token, err := jwt.Parse(rawToken, func(t *jwt.Token) (any, error) {
+		// HS256 以外は弾く
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return a.secret, nil
+	})
 	if err != nil {
-		a.logger.Info("invalid token", zap.String("got", raw), zap.Error(err))
+		a.logger.Info("invalid token", zap.String("got", rawToken), zap.Error(err))
 		return "", ErrInvalidToken
 	}
-	return sub, nil
-}
+	if !token.Valid {
+		a.logger.Info("invalid token (not valid)", zap.String("got", rawToken))
+		return "", ErrInvalidToken
+	}
 
-// 開発用: トークン発行をここからも呼べるようにしておく（使うかはお好みで）
-func (a *Authenticator) GenerateDevToken(sub string) (string, error) {
-	return a.jwt.GenerateToken(sub, 24*60*time.Minute)
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		a.logger.Info("invalid token claims type", zap.String("got", rawToken))
+		return "", ErrInvalidToken
+	}
+
+	// exp チェック（念のため）
+	if v, ok := claims["exp"]; ok {
+		switch exp := v.(type) {
+		case float64:
+			if time.Now().Unix() > int64(exp) {
+				a.logger.Info("token expired", zap.Any("exp", exp))
+				return "", ErrInvalidToken
+			}
+		}
+	}
+
+	sub, _ := claims["sub"].(string)
+	return sub, nil
 }

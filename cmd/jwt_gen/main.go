@@ -1,12 +1,11 @@
-// cmd/jwt_gen/main.go
 package main
 
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/hijjiri/grpc-echo/internal/auth"
-	"go.uber.org/zap"
 )
 
 func getenv(key, def string) string {
@@ -17,25 +16,18 @@ func getenv(key, def string) string {
 }
 
 func main() {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
-
-	// サーバと同じ SECRET を使う（k8s の AUTH_SECRET と合わせる）
+	// サーバと同じシークレットを使う
 	secret := getenv("AUTH_SECRET", "my-dev-secret-key")
 
-	a := auth.NewAuthenticator(secret, logger)
+	// 開発用の固定ユーザー ID（なんでも OK）
+	const subject = "user-123"
 
-	// ひとまず subject は固定で OK（必要なら引数にしてもよい）
-	token, err := a.GenerateDevToken("user-123")
+	token, err := auth.GenerateToken(secret, subject, 24*time.Hour)
 	if err != nil {
-		logger.Fatal("failed to generate token", zap.Error(err))
+		// 単純なツールなので雑に panic で OK
+		panic(err)
 	}
 
-	// そのまま標準出力に 1 行だけ出す
+	// 他のスクリプトや curl から使いやすいように、標準出力にそのまま出す
 	fmt.Println(token)
-
-	// おまけ: ちゃんと Validate 通るか自己検証
-	if _, err := a.ValidateToken(token); err != nil {
-		logger.Warn("self validate failed", zap.Error(err))
-	}
 }

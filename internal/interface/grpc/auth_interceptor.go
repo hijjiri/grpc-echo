@@ -1,3 +1,4 @@
+// internal/interface/grpc/auth_interceptor.go
 package grpcadapter
 
 import (
@@ -13,56 +14,52 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func NewAuthUnaryInterceptor(a *auth.Authenticator, logger *zap.Logger) grpc.UnaryServerInterceptor {
+// JWT 認証用の Unary インターセプタ
+func NewAuthUnaryInterceptor(logger *zap.Logger, authenticator *auth.Authenticator) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
-		req interface{},
+		req any,
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
-	) (interface{}, error) {
-		// Health / Reflection は認証スキップ
-		if strings.HasPrefix(info.FullMethod, "/grpc.health.v1.Health/") ||
-			strings.HasPrefix(info.FullMethod, "/grpc.reflection.v1.") {
+	) (any, error) {
+		// HealthCheck など認証不要なものをここで除外したければこの条件に追加
+		if info.FullMethod == "/grpc.health.v1.Health/Check" {
 			return handler(ctx, req)
 		}
 
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
-			logger.Info("no metadata in context")
 			return nil, status.Error(codes.Unauthenticated, "missing metadata")
 		}
 
-		// gRPC の MD キーは小文字で持たれるので "authorization"
-		vals := md.Get("authorization")
-		if len(vals) == 0 {
-			logger.Info("missing authorization header", zap.Any("metadata", md))
+		values := md.Get("authorization")
+		if len(values) == 0 {
 			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 
-		raw := strings.TrimSpace(vals[0])
+		raw := values[0]
 		logger.Info("got authorization header", zap.String("raw", raw))
 
-		// "Bearer <token>" を素直にパース（大文字小文字は無視）
-		parts := strings.Fields(raw)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			logger.Info("invalid authorization header format", zap.String("raw", raw))
-			return nil, status.Error(codes.Unauthenticated, "invalid authorization header")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(raw, prefix) {
+			return nil, status.Error(codes.Unauthenticated, "invalid authorization header format")
 		}
-		token := parts[1]
 
-		// JWT 検証
-		sub, err := a.ValidateToken(token)
+		token := strings.TrimSpace(raw[len(prefix):])
+		if token == "" {
+			return nil, status.Error(codes.Unauthenticated, "invalid authorization header format")
+		}
+
+		_, err := authenticator.Authenticate(token)
 		if err != nil {
 			if errors.Is(err, auth.ErrInvalidToken) {
 				return nil, status.Error(codes.Unauthenticated, "invalid token")
 			}
-			logger.Error("token validation error", zap.Error(err))
-			return nil, status.Error(codes.Internal, "internal auth error")
+			logger.Error("failed to authenticate token", zap.Error(err))
+			return nil, status.Error(codes.Internal, "internal error")
 		}
 
-		// 必要ならここで sub を context に詰めるが、今は未使用なのでスキップ
-		_ = sub
-
+		// 認証 OK なのでハンドラへ
 		return handler(ctx, req)
 	}
 }
