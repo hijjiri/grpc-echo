@@ -43,8 +43,8 @@ run-server:
 	$(GO_RUN) ./cmd/server
 
 # ---------- Run (Local) ----------
-.PHONY: run-build
-run-build:
+.PHONY: build-server
+build-server:
 	$(GO_BUILD) ./cmd/server
 	
 # ---------- Docker ----------
