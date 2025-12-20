@@ -1,6 +1,7 @@
 # ---------- Config ----------
 GO        ?= go
 GO_RUN    ?= $(GO) run
+GO_BUILD    ?= $(GO) build
 GRPCURL   ?= grpcurl
 DOCKER_COMPOSE ?= docker-compose
 GRPC_ADDR ?= localhost:50051
@@ -40,6 +41,11 @@ proto:
 .PHONY: run-server
 run-server:
 	$(GO_RUN) ./cmd/server
+
+# ---------- Run (Local) ----------
+.PHONY: run-build
+run-build:
+	$(GO_BUILD) ./cmd/server
 	
 # ---------- Docker ----------
 .PHONY: docker-build docker-run docker-stop
