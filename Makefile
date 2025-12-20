@@ -12,6 +12,9 @@ KUBECTL       ?= kubectl
 K8S_NAMESPACE ?= default
 KIND_CLUSTER  ?= grpc-echo   # kind クラスタ名
 
+# JWT
+JWT_SECRET ?= my-dev-secret-key
+
 # プロトファイルディレクトリ自動検出
 PROTO_DIRS := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
 
@@ -123,7 +126,7 @@ run-gateway:
 # ---------- Kubernetes Utility ----------
 .PHONY: k-build k-pods k-grpc k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-grpc-logs k-auth
+        k-apply k-del-pods k-grpc-logs k-auth k-metorics
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
 k-build:
@@ -155,6 +158,9 @@ k-graf-logs:
 # OpenTelemetry Collector のログ監視 (follow)
 k-otel-logs:
 	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
+
+k-metrics:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo 9464:9464
 
 # MySQL に直接ログイン（root/root, grpcdb）
 k-mysql:
