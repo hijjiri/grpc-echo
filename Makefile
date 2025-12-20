@@ -235,8 +235,14 @@ k-auth:
 	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml | grep -n "AUTH_SECRET" || true
 
 # ---------- JWT Helper ----------
-.PHONY: jwt
-# 例: make jwt              (JWT_SECRET のデフォルト値で発行)
-#     make jwt JWT_SECRET=my-dev-secret-key
-jwt:
+.PHONY: jwt jwt-print
+
+# 素のトークンだけを表示したいとき（今までと同じ挙動）
+jwt-print:
 	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
+
+# シェルで eval して TOKEN に一発で入れたい用
+jwt:
+	@cd cmd/jwt_gen && \
+	  token=$$(AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .); \
+	  echo "export TOKEN=$$token"

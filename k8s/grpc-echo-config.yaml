@@ -3,10 +3,11 @@ kind: ConfigMap
 metadata:
   name: grpc-echo-config
 data:
-  DB_HOST: mysql
+  DB_HOST: "mysql"
   DB_PORT: "3306"
-  DB_NAME: grpcdb
-  OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+  DB_NAME: "grpcdb"
+
+  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
 
 ---
 apiVersion: v1
@@ -15,6 +16,7 @@ metadata:
   name: grpc-echo-secret
 type: Opaque
 stringData:
-  DB_USER: root
-  DB_PASSWORD: root
-  AUTH_SECRET: my-dev-secret-key
+  DB_USER: "root"
+  DB_PASSWORD: "root"
+
+  AUTH_SECRET: "my-dev-secret-key"

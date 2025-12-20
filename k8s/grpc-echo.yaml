@@ -1,4 +1,3 @@
-# k8s/grpc-echo-deploy.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,22 +19,28 @@ spec:
           ports:
             - containerPort: 50051  # gRPC
             - containerPort: 9464   # metrics
+
+          # ★ ConfigMap / Secret から環境変数をまとめて注入
           envFrom:
             - configMapRef:
                 name: grpc-echo-config
             - secretRef:
                 name: grpc-echo-secret
-          # ヘルスチェック
+
+          # ---- ヘルスチェック (開発用のゆるい設定) ----
           livenessProbe:
             tcpSocket:
               port: 50051
             initialDelaySeconds: 5
             periodSeconds: 10
+
           readinessProbe:
             tcpSocket:
               port: 50051
             initialDelaySeconds: 2
             periodSeconds: 5
+
+          # ---- リソース制限 (開発用の控えめ設定) ----
           resources:
             requests:
               cpu: "50m"
