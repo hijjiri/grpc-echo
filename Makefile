@@ -5,7 +5,6 @@ GRPCURL   ?= grpcurl
 DOCKER_COMPOSE ?= docker-compose
 GRPC_ADDR ?= localhost:50051
 SERVICE   ?=
-ARGS      ?=
 
 # Kubernetes / kind
 KUBECTL       ?= kubectl
@@ -38,42 +37,36 @@ proto:
 	  api/todo/v1/todo.proto
 
 # ---------- Run (Local) ----------
-.PHONY: run-server run-client run-todo
+.PHONY: run-server
 run-server:
 	$(GO_RUN) ./cmd/server
-
-run-client:
-	$(GO_RUN) ./cmd/client $(ARGS)
-
-run-todo:
-	$(GO_RUN) ./cmd/todo_client $(ARGS)
-
+	
 # ---------- Docker ----------
-.PHONY: doc-b doc-r doc-s
-doc-b:
+.PHONY: docker-build docker-run docker-stop
+docker-build:
 	docker build -t grpc-echo .
 
-doc-r:
+docker-run:
 	docker run --rm -p 50051:50051 --name grpc-echo grpc-echo
 
-doc-s:
+docker-stop:
 	-docker stop grpc-echo || true
 
 # ---------- Docker Compose ----------
-.PHONY: com-b com-db com-d com-l com-p
-com-b:
+.PHONY: compose-build compose-db compose-down compose-logs compose-ps
+compose-build:
 	$(DOCKER_COMPOSE) up --build
 
-com-db:
+compose-db:
 	$(DOCKER_COMPOSE) up -d db
 
-com-d:
+compose-down:
 	$(DOCKER_COMPOSE) down
 
-com-l:
+compose-logs:
 	$(DOCKER_COMPOSE) logs -f
 
-com-p:
+compose-ps:
 	$(DOCKER_COMPOSE) ps
 
 # ---------- Tools ----------
