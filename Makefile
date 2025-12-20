@@ -1,10 +1,25 @@
 # ---------- Config ----------
-GO        ?= go
-GO_RUN    ?= $(GO) run
-GO_BUILD  ?= $(GO) build
-GRPCURL   ?= grpcurl
+GO          ?= go
+GO_RUN      ?= $(GO) run
+GO_BUILD    ?= $(GO) build
+GRPCURL     ?= grpcurl
 DOCKER_COMPOSE ?= docker-compose
-GRPC_ADDR ?= localhost:50051
+
+# gRPC / HTTP / Metrics のローカルアクセス用アドレス
+GRPC_ADDR          ?= localhost:50051
+HTTP_GATEWAY_ADDR  ?= localhost:8081
+METRICS_ADDR       ?= localhost:9464
+
+# アドレスから host / port を分解（grpcurl 用などに便利）
+GRPC_HOST          := $(word 1,$(subst :, ,$(GRPC_ADDR)))
+GRPC_PORT          := $(word 2,$(subst :, ,$(GRPC_ADDR)))
+
+HTTP_GATEWAY_HOST  := $(word 1,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
+HTTP_GATEWAY_PORT  := $(word 2,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
+
+METRICS_HOST       := $(word 1,$(subst :, ,$(METRICS_ADDR)))
+METRICS_PORT       := $(word 2,$(subst :, ,$(METRICS_ADDR)))
+
 SERVICE   ?=
 
 # Kubernetes / kind
@@ -40,7 +55,7 @@ proto:
 	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
 	  api/todo/v1/todo.proto
 
-# ---------- Local ----------
+# ---------- Run (Local) ----------
 .PHONY: run-server
 run-server:
 	$(GO_RUN) ./cmd/server
@@ -54,8 +69,12 @@ build-server:
 docker-build:
 	docker build -t grpc-echo:latest .
 
+# ホスト側ポートは GRPC_ADDR から取得、コンテナ内は 50051 で固定
 docker-run:
-	docker run --rm -p 50051:50051 --name grpc-echo grpc-echo
+	docker run --rm \
+	  -p $(GRPC_PORT):50051 \
+	  --name grpc-echo \
+	  grpc-echo
 
 docker-stop:
 	-docker stop grpc-echo || true
@@ -115,7 +134,7 @@ health:
 	fi
 
 evans:
-	evans --host localhost --port 50051 -r repl
+	evans --host $(GRPC_HOST) --port $(GRPC_PORT) -r repl
 
 # ---------- HTTP Gateway (ローカル用) ----------
 .PHONY: run-gateway
@@ -123,10 +142,11 @@ run-gateway:
 	$(GO_RUN) ./cmd/http_gateway
 
 # ---------- Kubernetes Utility ----------
-.PHONY: k-build k-pods k-grpc k-graf k-graf-logs \
+.PHONY: k-build k-pods k-grpc k-grpc-logs \
+        k-gw k-gw-logs \
+        k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-grpc-logs k-auth k-metrics \
-        k-gw-build k-gw k-gw-logs
+        k-apply k-del-pods k-auth k-metrics
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
 k-build:
@@ -139,13 +159,23 @@ k-build:
 k-pods:
 	$(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
 
-# gRPC サービスを localhost:50051 にポートフォワード
+# gRPC サービスを localhost:GRPC_PORT にポートフォワード
+# （Service 側は常に 50051）
 k-grpc:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo 50051:50051
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(GRPC_PORT):50051
 
 # gRPC サービス(grpc-echo)のログ監視
 k-grpc-logs:
 	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f
+
+# HTTP Gateway を localhost:HTTP_GATEWAY_PORT にポートフォワード
+# （Service 側は常に 8081）
+k-gw:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway $(HTTP_GATEWAY_PORT):8081
+
+# HTTP Gateway のログ監視
+k-gw-logs:
+	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f
 
 # Grafana を localhost:3000 にポートフォワード
 k-graf:
@@ -159,9 +189,10 @@ k-graf-logs:
 k-otel-logs:
 	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
 
-# メトリクス用ポートフォワード (:9464/metrics)
+# メトリクス用ポートフォワード（ホスト側は METRICS_PORT）
+# Service 側は常に 9464
 k-metrics:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo 9464:9464
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(METRICS_PORT):9464
 
 # MySQL に直接ログイン（root/root, grpcdb）
 k-mysql:
@@ -202,23 +233,6 @@ k-del-pods:
 # grpc-echo Deployment の AUTH_SECRET 設定確認
 k-auth:
 	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml | grep -n "AUTH_SECRET" || true
-
-# --- HTTP Gateway 用 Kubernetes ユーティリティ ---
-
-# Gateway イメージをビルド → kind にロード → Deployment 再起動
-k-gw-build:
-	docker build -f Dockerfile.http_gateway -t grpc-http-gateway:latest .
-	kind load docker-image --name $(KIND_CLUSTER) grpc-http-gateway:latest
-	$(KUBECTL) rollout restart deployment http-gateway -n $(K8S_NAMESPACE) || true
-	$(KUBECTL) get pods -l app=http-gateway -n $(K8S_NAMESPACE) || true
-
-# Gateway Service を localhost:8081 にポートフォワード
-k-gw:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway 8081:8081
-
-# Gateway のログ監視
-k-gw-logs:
-	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f
 
 # ---------- JWT Helper ----------
 .PHONY: jwt
