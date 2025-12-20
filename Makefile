@@ -44,7 +44,7 @@ run-server:
 # ---------- Docker ----------
 .PHONY: docker-build docker-run docker-stop
 docker-build:
-	docker build -t grpc-echo .
+	docker build -t grpc-echo:latest .
 
 docker-run:
 	docker run --rm -p 50051:50051 --name grpc-echo grpc-echo
@@ -116,7 +116,8 @@ run-gateway:
 
 # ---------- Kubernetes Utility ----------
 .PHONY: k-build k-pods k-grpc k-graf k-graf-logs \
-        k-mysql-logs k-otel-logs k-mysql k-mysql-sh
+        k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
+        k-apply k-del-pods k-grpc-logs k-auth
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
 k-build:
@@ -133,6 +134,10 @@ k-pods:
 k-grpc:
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo 50051:50051
 
+# gRPC サービス(grpc-echo)のログ監視
+k-grpc-logs:
+	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f
+
 # Grafana を localhost:3000 にポートフォワード
 k-graf:
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grafana 3000:3000
@@ -141,11 +146,7 @@ k-graf:
 k-graf-logs:
 	$(KUBECTL) logs deploy/grafana -n $(K8S_NAMESPACE) -f
 
-# MySQL のログ監視
-k-mysql-logs:
-	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
-
-# OpenTelemetry Collector のログ監視
+# OpenTelemetry Collector のログ監視 (follow)
 k-otel-logs:
 	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
 
@@ -155,8 +156,43 @@ k-mysql:
 	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
 	  -- mysql -uroot -proot grpcdb
 
+# MySQL のログ監視
+k-mysql-logs:
+	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
+
 # MySQL Pod のシェルに入る
 k-mysql-sh:
 	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) \
 	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
 	  -- bash
+
+# k8s マニフェスト適用
+#   make k-apply                -> k8s/ ディレクトリ配下を一括 apply
+#   make k-apply FILE=k8s/mysql.yaml
+k-apply:
+	@if [ -z "$(FILE)" ]; then \
+	  echo "Applying manifests under k8s/"; \
+	  $(KUBECTL) apply -n $(K8S_NAMESPACE) -f k8s/; \
+	else \
+	  echo "Applying $(FILE)"; \
+	  $(KUBECTL) apply -n $(K8S_NAMESPACE) -f $(FILE); \
+	fi
+
+# app ラベルで Pod を削除して再作成させる
+#   make k-del-pods APP=mysql
+k-del-pods:
+	@if [ -z "$(APP)" ]; then \
+	  echo "Usage: make k-del-pods APP=mysql"; exit 1; \
+	fi
+	$(KUBECTL) delete pod -l app=$(APP) -n $(K8S_NAMESPACE)
+
+# grpc-echo Deployment の AUTH_SECRET 設定確認
+k-auth:
+	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml | grep -n "AUTH_SECRET" || true
+
+# ---------- JWT Helper ----------
+.PHONY: jwt
+# 例: make jwt              (JWT_SECRET のデフォルト値で発行)
+#     make jwt JWT_SECRET=my-dev-secret-key
+jwt:
+	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
