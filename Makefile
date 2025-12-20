@@ -126,7 +126,7 @@ run-gateway:
 # ---------- Kubernetes Utility ----------
 .PHONY: k-build k-pods k-grpc k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-grpc-logs k-auth k-metorics
+        k-apply k-del-pods k-grpc-logs k-auth k-metrics
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
 k-build:
