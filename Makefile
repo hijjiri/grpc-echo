@@ -146,7 +146,8 @@ run-gateway:
         k-gw k-gw-logs \
         k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-auth k-metrics
+        k-apply k-del-pods k-auth k-metrics \
+        k-cm k-secret k-secret-decode
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
 k-build:
@@ -222,17 +223,31 @@ k-apply:
 	  $(KUBECTL) apply -n $(K8S_NAMESPACE) -f $(FILE); \
 	fi
 
-# app ラベルで Pod を削除して再作成させる
-#   make k-del-pods APP=mysql
+# 任意のラベルセレクタで Pod を削除して再作成させる
+#   make k-del-pods SEL="app=mysql"
 k-del-pods:
-	@if [ -z "$(APP)" ]; then \
-	  echo "Usage: make k-del-pods APP=mysql"; exit 1; \
+	@if [ -z "$(SEL)" ]; then \
+	  echo "Usage: make k-del-pods SEL=\"app=mysql\""; exit 1; \
 	fi
-	$(KUBECTL) delete pod -l app=$(APP) -n $(K8S_NAMESPACE)
+	$(KUBECTL) delete pod -l $(SEL) -n $(K8S_NAMESPACE)
 
 # grpc-echo Deployment の AUTH_SECRET 設定確認
 k-auth:
 	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml | grep -n "AUTH_SECRET" || true
+
+# grpc-echo 用 ConfigMap を確認
+k-cm:
+	$(KUBECTL) get configmap grpc-echo-config -n $(K8S_NAMESPACE) -o yaml
+
+# grpc-echo 用 Secret を確認（値は base64 エンコード）
+k-secret:
+	$(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o yaml
+
+# Secret の中身を開発用に decode して確認（※機微情報に注意）
+k-secret-decode:
+	@echo "DB_USER: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_USER}' | base64 -d)"
+	@echo "DB_PASSWORD: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)"
+	@echo "AUTH_SECRET: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.AUTH_SECRET}' | base64 -d)"
 
 # ---------- JWT Helper ----------
 .PHONY: jwt jwt-print
