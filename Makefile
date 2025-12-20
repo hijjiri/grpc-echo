@@ -1,7 +1,7 @@
 # ---------- Config ----------
 GO        ?= go
 GO_RUN    ?= $(GO) run
-GO_BUILD    ?= $(GO) build
+GO_BUILD  ?= $(GO) build
 GRPCURL   ?= grpcurl
 DOCKER_COMPOSE ?= docker-compose
 GRPC_ADDR ?= localhost:50051
@@ -40,16 +40,15 @@ proto:
 	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
 	  api/todo/v1/todo.proto
 
-# ---------- Run (Local) ----------
+# ---------- Local ----------
 .PHONY: run-server
 run-server:
 	$(GO_RUN) ./cmd/server
 
-# ---------- Run (Local) ----------
 .PHONY: build-server
 build-server:
 	$(GO_BUILD) ./cmd/server
-	
+
 # ---------- Docker ----------
 .PHONY: docker-build docker-run docker-stop
 docker-build:
@@ -126,7 +125,8 @@ run-gateway:
 # ---------- Kubernetes Utility ----------
 .PHONY: k-build k-pods k-grpc k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-grpc-logs k-auth k-metrics
+        k-apply k-del-pods k-grpc-logs k-auth k-metrics \
+        k-gw-build k-gw k-gw-logs
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
 k-build:
@@ -159,6 +159,7 @@ k-graf-logs:
 k-otel-logs:
 	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
 
+# メトリクス用ポートフォワード (:9464/metrics)
 k-metrics:
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo 9464:9464
 
@@ -201,6 +202,23 @@ k-del-pods:
 # grpc-echo Deployment の AUTH_SECRET 設定確認
 k-auth:
 	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml | grep -n "AUTH_SECRET" || true
+
+# --- HTTP Gateway 用 Kubernetes ユーティリティ ---
+
+# Gateway イメージをビルド → kind にロード → Deployment 再起動
+k-gw-build:
+	docker build -f Dockerfile.http_gateway -t grpc-http-gateway:latest .
+	kind load docker-image --name $(KIND_CLUSTER) grpc-http-gateway:latest
+	$(KUBECTL) rollout restart deployment http-gateway -n $(K8S_NAMESPACE) || true
+	$(KUBECTL) get pods -l app=http-gateway -n $(K8S_NAMESPACE) || true
+
+# Gateway Service を localhost:8081 にポートフォワード
+k-gw:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway 8081:8081
+
+# Gateway のログ監視
+k-gw-logs:
+	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f
 
 # ---------- JWT Helper ----------
 .PHONY: jwt

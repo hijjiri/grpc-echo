@@ -1,0 +1,26 @@
+# ビルド用ステージ
+FROM golang:1.24 AS builder
+
+WORKDIR /app
+
+# 依存関係取得
+COPY go.mod go.sum ./
+RUN go mod download
+
+# ソース一式コピー
+COPY . .
+
+# HTTP Gateway バイナリをビルド
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o http_gateway ./cmd/http_gateway
+
+# 実行用ステージ（distroless）
+FROM gcr.io/distroless/base-debian12 AS final
+
+WORKDIR /app
+
+COPY --from=builder /app/http_gateway .
+
+# HTTP ポート
+EXPOSE 8081
+
+ENTRYPOINT ["./http_gateway"]
