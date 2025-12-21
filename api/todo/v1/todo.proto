@@ -67,4 +67,6 @@ service TodoService {
       body: "*"          // title/done を JSON で渡す
     };
   }
+
+  rpc ListTodosStream(ListTodosRequest) returns (stream Todo) {}
 }

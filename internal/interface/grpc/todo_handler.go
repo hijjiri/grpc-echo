@@ -86,3 +86,37 @@ func toGRPCError(err error) error {
 		return status.Error(codes.Internal, "internal error")
 	}
 }
+
+// 既存の ListTodos と同じように usecase を呼んで、
+// 返ってきた slice を 1 件ずつ stream.Send するだけ
+func (h *TodoHandler) ListTodosStream(
+	req *todov1.ListTodosRequest,
+	stream todov1.TodoService_ListTodosStreamServer,
+) error {
+	ctx := stream.Context()
+
+	// 既存の ListTodos と同じ usecase を利用
+	todos, err := h.uc.List(ctx)
+	if err != nil {
+		// 既にあるロガーを使っている場合は、そちらに合わせてください
+		// h.logger.Error("failed to list todos (stream)", zap.Error(err))
+		return err
+	}
+
+	for _, t := range todos {
+		resp := &todov1.Todo{
+			Id:    t.ID,
+			Title: t.Title,
+			Done:  t.Done,
+			// created_at / updated_at を proto に出しているならここでセット
+		}
+
+		if err := stream.Send(resp); err != nil {
+			// クライアント側が切断した場合など
+			// h.logger.Warn("failed to send todo (stream)", zap.Error(err))
+			return err
+		}
+	}
+
+	return nil
+}

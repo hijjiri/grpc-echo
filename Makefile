@@ -99,7 +99,8 @@ compose-ps:
 # ---------- Tools ----------
 .PHONY: fmt vet lint tree
 fmt:
-	gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
+	@echo "==> gofmt all *.go"
+	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
 
 vet:
 	$(GO) vet ./...
@@ -146,7 +147,7 @@ run-gateway:
         k-gw k-gw-logs \
         k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-auth k-metrics \
+        k-apply k-del-pods k-metrics k-env \
         k-cm k-secret k-secret-decode
 
 # gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
@@ -231,10 +232,6 @@ k-del-pods:
 	fi
 	$(KUBECTL) delete pod -l $(SEL) -n $(K8S_NAMESPACE)
 
-# grpc-echo Deployment の AUTH_SECRET 設定確認
-k-auth:
-	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml | grep -n "AUTH_SECRET" || true
-
 # grpc-echo 用 ConfigMap を確認
 k-cm:
 	$(KUBECTL) get configmap grpc-echo-config -n $(K8S_NAMESPACE) -o yaml
@@ -248,6 +245,11 @@ k-secret-decode:
 	@echo "DB_USER: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_USER}' | base64 -d)"
 	@echo "DB_PASSWORD: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)"
 	@echo "AUTH_SECRET: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.AUTH_SECRET}' | base64 -d)"
+
+# grpc-echo Deployment の envFrom セクションをざっくり確認
+k-env:
+	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml \
+	  | sed -n '/envFrom:/,/imagePullPolicy/p'
 
 # ---------- JWT Helper ----------
 .PHONY: jwt jwt-print
