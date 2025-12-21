@@ -3,11 +3,18 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
-
 	"go.uber.org/zap"
 )
+
+// *sql.DB と *sql.Tx を同じように扱うための小さなインターフェース
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
 
 type TodoRepository struct {
 	db     *sql.DB
@@ -15,49 +22,49 @@ type TodoRepository struct {
 }
 
 func NewTodoRepository(db *sql.DB, logger *zap.Logger) *TodoRepository {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &TodoRepository{
 		db:     db,
 		logger: logger,
 	}
 }
 
-// logger が nil の場合でも panic しないように helper を用意
-func (r *TodoRepository) log() *zap.Logger {
-	if r.logger != nil {
-		return r.logger
+// ctx に Tx がぶら下がっていればそれを使い、なければ通常の *sql.DB を使う。
+func (r *TodoRepository) getExecutor(ctx context.Context) executor {
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx
 	}
-	return zap.NewNop()
+	return r.db
 }
 
-// Create は domain の Todo を受け取り、DBにINSERTしてIDを付けて返す
 func (r *TodoRepository) Create(ctx context.Context, t *domain_todo.Todo) (*domain_todo.Todo, error) {
-	res, err := r.db.ExecContext(
-		ctx,
-		"INSERT INTO todos (title, done) VALUES (?, ?)",
+	exec := r.getExecutor(ctx)
+
+	res, err := exec.ExecContext(ctx,
+		`INSERT INTO todos (title, done) VALUES (?, ?)`,
 		t.Title,
 		t.Done,
 	)
 	if err != nil {
-		r.log().Error("failed to insert todo",
+		r.logger.Error("failed to insert todo",
 			zap.String("title", t.Title),
 			zap.Bool("done", t.Done),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, fmt.Errorf("insert todo: %w", err)
 	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
-		r.log().Error("failed to get last insert id",
-			zap.String("title", t.Title),
-			zap.Error(err),
-		)
-		return nil, err
+		r.logger.Error("failed to get last insert id", zap.Error(err))
+		return nil, fmt.Errorf("get last insert id: %w", err)
 	}
 
 	t.ID = id
 
-	r.log().Info("todo created",
+	r.logger.Info("todo created",
 		zap.Int64("id", t.ID),
 		zap.String("title", t.Title),
 		zap.Bool("done", t.Done),
@@ -66,109 +73,107 @@ func (r *TodoRepository) Create(ctx context.Context, t *domain_todo.Todo) (*doma
 	return t, nil
 }
 
-// List は DB から全件取得し、domain の Todo スライスで返す
 func (r *TodoRepository) List(ctx context.Context) ([]*domain_todo.Todo, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT id, title, done FROM todos ORDER BY id")
+	exec := r.getExecutor(ctx)
+
+	rows, err := exec.QueryContext(ctx,
+		`SELECT id, title, done FROM todos ORDER BY id`,
+	)
 	if err != nil {
-		r.log().Error("failed to query todos", zap.Error(err))
-		return nil, err
+		r.logger.Error("failed to query todos", zap.Error(err))
+		return nil, fmt.Errorf("query todos: %w", err)
 	}
 	defer rows.Close()
 
 	var todos []*domain_todo.Todo
 	for rows.Next() {
-		var t domain_todo.Todo
-		if err := rows.Scan(&t.ID, &t.Title, &t.Done); err != nil {
-			r.log().Error("failed to scan todo row", zap.Error(err))
-			return nil, err
+		var (
+			t       domain_todo.Todo
+			doneInt int
+		)
+		if err := rows.Scan(&t.ID, &t.Title, &doneInt); err != nil {
+			r.logger.Error("failed to scan todo", zap.Error(err))
+			return nil, fmt.Errorf("scan todo: %w", err)
 		}
+		t.Done = doneInt == 1
 		todos = append(todos, &t)
 	}
+
 	if err := rows.Err(); err != nil {
-		r.log().Error("rows error", zap.Error(err))
-		return nil, err
+		r.logger.Error("rows error", zap.Error(err))
+		return nil, fmt.Errorf("rows error: %w", err)
 	}
 
-	r.log().Info("todos listed",
+	r.logger.Info("todos listed",
 		zap.Int("count", len(todos)),
 	)
 
 	return todos, nil
 }
 
-// Delete は削除件数 > 0 なら true を返す
-func (r *TodoRepository) Delete(ctx context.Context, id int64) (bool, error) {
-	res, err := r.db.ExecContext(ctx, "DELETE FROM todos WHERE id = ?", id)
-	if err != nil {
-		r.log().Error("failed to delete todo",
-			zap.Int64("id", id),
-			zap.Error(err),
-		)
-		return false, err
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		r.log().Error("failed to get rows affected",
-			zap.Int64("id", id),
-			zap.Error(err),
-		)
-		return false, err
-	}
-
-	if affected == 0 {
-		r.log().Info("todo delete: not found",
-			zap.Int64("id", id),
-		)
-		return false, nil
-	}
-
-	r.log().Info("todo deleted",
-		zap.Int64("id", id),
-	)
-
-	return true, nil
-}
-
 func (r *TodoRepository) Update(ctx context.Context, t *domain_todo.Todo) (*domain_todo.Todo, error) {
-	res, err := r.db.ExecContext(
-		ctx,
-		"UPDATE todos SET title = ?, done = ? WHERE id = ?",
+	exec := r.getExecutor(ctx)
+
+	res, err := exec.ExecContext(ctx,
+		`UPDATE todos SET title = ?, done = ? WHERE id = ?`,
 		t.Title,
 		t.Done,
 		t.ID,
 	)
 	if err != nil {
-		r.log().Error("failed to update todo",
+		r.logger.Error("failed to update todo",
 			zap.Int64("id", t.ID),
 			zap.String("title", t.Title),
 			zap.Bool("done", t.Done),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, fmt.Errorf("update todo: %w", err)
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		r.log().Error("failed to get rows affected on update",
-			zap.Int64("id", t.ID),
-			zap.Error(err),
-		)
-		return nil, err
+	if n, err := res.RowsAffected(); err == nil {
+		if n == 0 {
+			r.logger.Warn("no todo updated", zap.Int64("id", t.ID))
+		}
+	} else {
+		r.logger.Warn("failed to get rows affected (update)", zap.Error(err))
 	}
 
-	if affected == 0 {
-		r.log().Info("todo update: not found",
-			zap.Int64("id", t.ID),
-		)
-		return nil, nil // Usecase 側で ErrNotFound に変換してもOK
-	}
-
-	r.log().Info("todo updated",
+	r.logger.Info("todo updated",
 		zap.Int64("id", t.ID),
 		zap.String("title", t.Title),
 		zap.Bool("done", t.Done),
 	)
 
 	return t, nil
+}
+
+func (r *TodoRepository) Delete(ctx context.Context, id int64) (bool, error) {
+	exec := r.getExecutor(ctx)
+
+	res, err := exec.ExecContext(ctx,
+		`DELETE FROM todos WHERE id = ?`,
+		id,
+	)
+	if err != nil {
+		r.logger.Error("failed to delete todo",
+			zap.Int64("id", id),
+			zap.Error(err),
+		)
+		return false, fmt.Errorf("delete todo: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		r.logger.Warn("failed to get rows affected (delete)", zap.Error(err))
+		return false, fmt.Errorf("rows affected (delete): %w", err)
+	}
+
+	if n == 0 {
+		// 削除対象なし
+		r.logger.Info("no todo deleted", zap.Int64("id", id))
+		return false, nil
+	}
+
+	r.logger.Info("todo deleted", zap.Int64("id", id))
+	return true, nil
 }

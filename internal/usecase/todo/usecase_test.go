@@ -56,7 +56,7 @@ func TestUsecase_Create_Success(t *testing.T) {
 		},
 	}
 
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	got, err := uc.Create(context.Background(), "テストタイトル")
 	if err != nil {
@@ -78,7 +78,7 @@ func TestUsecase_Create_EmptyTitle(t *testing.T) {
 	t.Parallel()
 
 	repo := &mockRepo{}
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	_, err := uc.Create(context.Background(), "")
 	if err == nil {
@@ -101,7 +101,7 @@ func TestUsecase_List_Success(t *testing.T) {
 		},
 	}
 
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	list, err := uc.List(context.Background())
 	if err != nil {
@@ -128,7 +128,7 @@ func TestUsecase_Delete_Success(t *testing.T) {
 		},
 	}
 
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	if err := uc.Delete(context.Background(), 1); err != nil {
 		t.Fatalf("Delete returned error: %v", err)
@@ -139,7 +139,7 @@ func TestUsecase_Delete_InvalidID(t *testing.T) {
 	t.Parallel()
 
 	repo := &mockRepo{}
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	err := uc.Delete(context.Background(), 0)
 	if err == nil {
@@ -158,7 +158,7 @@ func TestUsecase_Delete_NotFound(t *testing.T) {
 			return false, nil // 削除対象なし
 		},
 	}
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	err := uc.Delete(context.Background(), 123)
 	if err == nil {
@@ -181,7 +181,7 @@ func TestUsecase_Update_Success(t *testing.T) {
 		},
 	}
 
-	uc := New(repo, zap.NewNop())
+	uc := New(repo, nil, zap.NewNop())
 
 	got, err := uc.Update(context.Background(), 3, "更新タイトル", true)
 	if err != nil {

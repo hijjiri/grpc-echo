@@ -169,7 +169,13 @@ func main() {
 
 	// ---------- Todo Service ----------
 	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db, logger)
-	uc := todo_usecase.New(repo, logger)
+
+	// ★ 追加: TxManager を作る
+	txMgr := mysqlrepo.NewTxManager(db, logger)
+
+	// Usecase に Repository と TxManager を注入
+	uc := todo_usecase.New(repo, txMgr, logger)
+
 	handler := grpcadapter.NewTodoHandler(uc)
 	todov1.RegisterTodoServiceServer(grpcServer, handler)
 

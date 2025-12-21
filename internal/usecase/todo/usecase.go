@@ -3,6 +3,7 @@ package todo_usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
 	"go.opentelemetry.io/otel"
@@ -11,45 +12,43 @@ import (
 	"go.uber.org/zap"
 )
 
-// ---- 公開エラー（既存テストと互換） ----
+// --------- OpenTelemetry メトリクス ---------
 
 var (
-	// 空タイトル
-	ErrEmptyTitle = errors.New("empty title")
-	// 不正なID
-	ErrInvalidID = errors.New("invalid id")
-	// 見つからない
-	ErrNotFound = errors.New("todo not found")
-)
-
-// ---- メトリクス ----
-
-var (
-	meter metric.Meter
+	meter = otel.Meter("github.com/hijjiri/grpc-echo/internal/usecase/todo")
 
 	todoCreatedCounter metric.Int64Counter
 	todoListCounter    metric.Int64Counter
 )
 
 func init() {
-	m := otel.Meter("github.com/hijjiri/grpc-echo/internal/usecase/todo")
+	var err error
 
-	todoCreatedCounter, _ = m.Int64Counter(
+	todoCreatedCounter, err = meter.Int64Counter(
 		"todo_created_total",
 		metric.WithDescription("Number of todos created"),
 	)
+	if err != nil {
+		// ロガーがないので、ここでは黙っておく
+	}
 
-	todoListCounter, _ = m.Int64Counter(
+	todoListCounter, err = meter.Int64Counter(
 		"todo_list_total",
 		metric.WithDescription("Number of times todos were listed"),
 	)
-
-	meter = m
+	if err != nil {
+	}
 }
 
-// ---- Usecase インターフェース ----
+// --------- TxManager インターフェース ---------
 
-// 既存の public API はそのまま
+// TxManager は「この処理をトランザクション内で実行する」ための抽象。
+type TxManager interface {
+	WithinTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// --------- 公開インターフェース ---------
+
 type Usecase interface {
 	Create(ctx context.Context, title string) (*domain_todo.Todo, error)
 	List(ctx context.Context) ([]*domain_todo.Todo, error)
@@ -57,63 +56,75 @@ type Usecase interface {
 	Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error)
 }
 
-// ---- 実装 ----
-
-// CQRS 的に、Read / Write を分けて持つ
+// usecase は Read/Write 両方の Repository を持ち、TxManager と logger を注入する。
 type usecase struct {
 	readRepo  domain_todo.ReadRepository
 	writeRepo domain_todo.WriteRepository
+	tx        TxManager
 	logger    *zap.Logger
 }
 
-// 既存コード・テスト用：1つの Repository を両方に使う
-func New(repo domain_todo.Repository, logger *zap.Logger) Usecase {
+// nopTxManager は「Tx を貼らずにそのまま実行するだけ」の実装。
+// テストや Tx 不要な場合のデフォルトとして使う。
+type nopTxManager struct{}
+
+func (nopTxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}
+
+// New は Todo Usecase を構築する。
+// TxManager が nil の場合は nopTxManager を使う。
+func New(repo domain_todo.Repository, tx TxManager, logger *zap.Logger) Usecase {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	if tx == nil {
+		tx = nopTxManager{}
+	}
+
 	return &usecase{
 		readRepo:  repo,
 		writeRepo: repo,
+		tx:        tx,
 		logger:    logger,
 	}
 }
 
-// 将来、読み取りと書き込みで別バックエンドを使いたくなったとき用
-// （今は使わなくてOK）
-func NewWithRepos(
-	readRepo domain_todo.ReadRepository,
-	writeRepo domain_todo.WriteRepository,
-	logger *zap.Logger,
-) Usecase {
-	return &usecase{
-		readRepo:  readRepo,
-		writeRepo: writeRepo,
-		logger:    logger,
-	}
-}
+// --------- usecase レベルのエラー（ドメインエラーのラップ） ---------
 
-// ---- Create ----
+var (
+	ErrEmptyTitle = domain_todo.ErrEmptyTitle
+	ErrInvalidID  = domain_todo.ErrInvalidID
+	ErrNotFound   = errors.New("todo not found")
+)
+
+// --------- 実装 ---------
 
 func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, error) {
-	if title == "" {
-		u.logger.Warn("failed to create todo: empty title")
-		return nil, ErrEmptyTitle
-	}
-
-	// ドメインのファクトリで不変条件をチェック
+	// ドメインのコンストラクタでバリデーション
 	t, err := domain_todo.NewTodo(title)
 	if err != nil {
-		// ドメインエラー → usecase のエラーにマッピング
+		// ErrEmptyTitle のようなドメインエラーを usecase エラーにマッピングする場合はここで。
 		if errors.Is(err, domain_todo.ErrEmptyTitle) {
 			return nil, ErrEmptyTitle
 		}
 		return nil, err
 	}
 
-	created, err := u.writeRepo.Create(ctx, t)
+	var created *domain_todo.Todo
+
+	// 書き込み系なので Tx を貼る
+	err = u.tx.WithinTx(ctx, func(txCtx context.Context) error {
+		var repoErr error
+		created, repoErr = u.writeRepo.Create(txCtx, t)
+		return repoErr
+	})
 	if err != nil {
-		u.logger.Error("failed to create todo in repo",
+		u.logger.Error("failed to create todo",
 			zap.String("title", title),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, fmt.Errorf("create todo: %w", err)
 	}
 
 	// メトリクス
@@ -129,17 +140,14 @@ func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, 
 	return created, nil
 }
 
-// ---- List ----
-
 func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
 	list, err := u.readRepo.List(ctx)
 	if err != nil {
-		u.logger.Error("failed to list todos",
-			zap.Error(err),
-		)
-		return nil, err
+		u.logger.Error("failed to list todos", zap.Error(err))
+		return nil, fmt.Errorf("list todos: %w", err)
 	}
 
+	// メトリクス
 	todoListCounter.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("source", "grpc")),
 	)
@@ -151,60 +159,45 @@ func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
 	return list, nil
 }
 
-// ---- Delete ----
-
 func (u *usecase) Delete(ctx context.Context, id int64) error {
-	// ID バリデーションはドメイン側のヘルパーに委譲
 	if err := domain_todo.ValidateID(id); err != nil {
-		u.logger.Warn("invalid id for delete",
-			zap.Int64("id", id),
-			zap.Error(err),
-		)
 		return ErrInvalidID
 	}
 
-	deleted, err := u.writeRepo.Delete(ctx, id)
+	var deleted bool
+
+	// 書き込み系なので Tx を貼る
+	err := u.tx.WithinTx(ctx, func(txCtx context.Context) error {
+		var repoErr error
+		deleted, repoErr = u.writeRepo.Delete(txCtx, id)
+		return repoErr
+	})
 	if err != nil {
-		u.logger.Error("failed to delete todo in repo",
+		u.logger.Error("failed to delete todo",
 			zap.Int64("id", id),
 			zap.Error(err),
 		)
-		return err
+		return fmt.Errorf("delete todo: %w", err)
 	}
 
 	if !deleted {
-		u.logger.Warn("todo not found for delete",
-			zap.Int64("id", id),
-		)
 		return ErrNotFound
 	}
 
-	u.logger.Info("todo deleted (usecase)",
-		zap.Int64("id", id),
-	)
-
+	u.logger.Info("todo deleted (usecase)", zap.Int64("id", id))
 	return nil
 }
 
-// ---- Update ----
-
 func (u *usecase) Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error) {
 	if err := domain_todo.ValidateID(id); err != nil {
-		u.logger.Warn("invalid id for update",
-			zap.Int64("id", id),
-			zap.Error(err),
-		)
 		return nil, ErrInvalidID
 	}
 
-	// ドメインエンティティを組み立て
 	t := &domain_todo.Todo{
-		ID:    id,
-		Title: title,
-		Done:  done,
+		ID:   id,
+		Done: done,
 	}
 
-	// タイトルのバリデーションはドメインメソッドに委譲
 	if err := t.ChangeTitle(title); err != nil {
 		if errors.Is(err, domain_todo.ErrEmptyTitle) {
 			return nil, ErrEmptyTitle
@@ -212,15 +205,22 @@ func (u *usecase) Update(ctx context.Context, id int64, title string, done bool)
 		return nil, err
 	}
 
-	updated, err := u.writeRepo.Update(ctx, t)
+	var updated *domain_todo.Todo
+
+	// 書き込み系なので Tx を貼る
+	err := u.tx.WithinTx(ctx, func(txCtx context.Context) error {
+		var repoErr error
+		updated, repoErr = u.writeRepo.Update(txCtx, t)
+		return repoErr
+	})
 	if err != nil {
-		u.logger.Error("failed to update todo in repo",
+		u.logger.Error("failed to update todo",
 			zap.Int64("id", id),
 			zap.String("title", title),
 			zap.Bool("done", done),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, fmt.Errorf("update todo: %w", err)
 	}
 
 	u.logger.Info("todo updated (usecase)",
