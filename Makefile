@@ -33,6 +33,9 @@ JWT_SECRET ?= my-dev-secret-key
 # プロトファイルディレクトリ自動検出
 PROTO_DIRS := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
 
+# gRPC-Gateway 用に対象 proto 一覧を自動検出
+GATEWAY_PROTOS := $(shell find api -name '*.proto' -print)
+
 # ---------- Protobuf / gRPC-Gateway ----------
 .PHONY: proto
 proto:
@@ -48,19 +51,14 @@ proto:
 	done
 
 	@echo "==> Generating gRPC-Gateway..."
-	# Todoサービス
-	protoc \
-	  -I . \
-	  -I third_party \
-	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
-	  api/todo/v1/todo.proto
-
-	# Authサービス
-	protoc \
-	  -I . \
-	  -I third_party \
-	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
-	  api/auth/v1/auth.proto
+	@for file in $(GATEWAY_PROTOS); do \
+		echo " -> $$file"; \
+		protoc \
+		  -I . \
+		  -I third_party \
+		  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
+		  $$file; \
+	done
 
 # ---------- Run (Local) ----------
 .PHONY: run-server
