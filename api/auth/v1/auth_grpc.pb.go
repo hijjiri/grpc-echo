@@ -26,7 +26,12 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AuthServiceClient interface {
-	// ログインして JWT を取得する。
+	// ログイン API
+	//
+	// HTTP:
+	//
+	//	POST /auth/login
+	//	Body: { "username": "...", "password": "..." }
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
 }
 
@@ -51,7 +56,12 @@ func (c *authServiceClient) Login(ctx context.Context, in *LoginRequest, opts ..
 // All implementations must embed UnimplementedAuthServiceServer
 // for forward compatibility
 type AuthServiceServer interface {
-	// ログインして JWT を取得する。
+	// ログイン API
+	//
+	// HTTP:
+	//
+	//	POST /auth/login
+	//	Body: { "username": "...", "password": "..." }
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }

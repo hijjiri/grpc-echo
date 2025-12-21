@@ -12,9 +12,30 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// 認証をスキップしてよいメソッドかどうかを判定。
+// fullMethod 例: "/auth.v1.AuthService/Login"
+func isAuthSkippedMethod(fullMethod string) bool {
+	// ログイン API は「まだトークンを持っていない」前提なので認証不要
+	if strings.HasPrefix(fullMethod, "/auth.v1.AuthService/") {
+		return true
+	}
+
+	// ヘルスチェックも認証スキップしておくと便利
+	if fullMethod == "/grpc.health.v1.Health/Check" {
+		return true
+	}
+
+	return false
+}
+
 // Unary 用 Auth Interceptor
 func NewAuthUnaryInterceptor(logger *zap.Logger, authz *auth.Authenticator) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		// ★ AuthService / Health は認証スキップ
+		if isAuthSkippedMethod(info.FullMethod) {
+			return handler(ctx, req)
+		}
+
 		md, _ := metadata.FromIncomingContext(ctx)
 
 		// ---- x-request-id を拾って Context に詰める（あれば）----
@@ -66,6 +87,11 @@ func (s *authStream) Context() context.Context {
 
 func NewAuthStreamInterceptor(logger *zap.Logger, authz *auth.Authenticator) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		// ★ AuthService / Health は認証スキップ
+		if isAuthSkippedMethod(info.FullMethod) {
+			return handler(srv, ss)
+		}
+
 		ctx := ss.Context()
 		md, _ := metadata.FromIncomingContext(ctx)
 

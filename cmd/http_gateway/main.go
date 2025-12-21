@@ -27,7 +27,7 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// gRPC サーバのアドレス（ローカル: localhost:50051, k8s: grpc-echo:50051 など）
+	// gRPC サーバのアドレス（ローカル: localhost:50051, k8s: grpc-echo:50051）
 	grpcAddr := getenv("GRPC_SERVER_ADDR", "localhost:50051")
 	// HTTP の Listen アドレス（デフォルト :8081）
 	httpAddr := getenv("HTTP_LISTEN_ADDR", ":8081")
@@ -39,15 +39,17 @@ func main() {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
+	// TodoService のハンドラ登録 (/v1/... 系)
 	if err := todov1.RegisterTodoServiceHandlerFromEndpoint(
 		ctx,
 		gwMux,
 		grpcAddr,
 		opts,
 	); err != nil {
-		log.Fatalf("failed to register gateway: %v", err)
+		log.Fatalf("failed to register todo gateway: %v", err)
 	}
 
+	// AuthService のハンドラ登録 (/auth/login)
 	if err := authv1.RegisterAuthServiceHandlerFromEndpoint(
 		ctx,
 		gwMux,
@@ -57,10 +59,10 @@ func main() {
 		log.Fatalf("failed to register auth gateway: %v", err)
 	}
 
-	// ルート用の mux を作って /healthz と Gateway を共存させる
+	// ルート用 mux （/healthz と Gateway を共存）
 	rootMux := http.NewServeMux()
 
-	// gRPC-Gateway (REST エンドポイント: /v1/...)
+	// gRPC-Gateway (REST エンドポイント: /v1/..., /auth/...)
 	rootMux.Handle("/", gwMux)
 
 	// /healthz (k8s の liveness/readinessProbe 用)
