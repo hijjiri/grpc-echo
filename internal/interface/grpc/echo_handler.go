@@ -1,4 +1,3 @@
-// internal/interface/grpc/echo_handler.go
 package grpcadapter
 
 import (

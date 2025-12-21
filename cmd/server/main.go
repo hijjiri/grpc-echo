@@ -144,12 +144,15 @@ func main() {
 	authz := auth.NewAuthenticator(logger, authSecret)
 
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		grpcadapter.NewRecoveryUnaryInterceptor(logger),
 		grpcadapter.NewLoggingUnaryInterceptor(logger),
 		grpcadapter.NewAuthUnaryInterceptor(logger, authz),
 	}
 
 	streamInterceptors := []grpc.StreamServerInterceptor{
+		grpcadapter.NewRecoveryStreamInterceptor(logger),
 		grpcadapter.NewLoggingStreamInterceptor(logger),
+		grpcadapter.NewAuthStreamInterceptor(logger, authz),
 	}
 
 	// ---------- gRPC Server ----------

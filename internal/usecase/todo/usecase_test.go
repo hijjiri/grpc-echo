@@ -1,4 +1,3 @@
-// internal/usecase/todo/usecase_test.go
 package todo_usecase
 
 import (

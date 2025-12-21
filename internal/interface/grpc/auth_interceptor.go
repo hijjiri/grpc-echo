@@ -1,9 +1,7 @@
-// internal/interface/grpc/auth_interceptor.go
 package grpcadapter
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/hijjiri/grpc-echo/internal/auth"
@@ -14,52 +12,107 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// JWT 認証用の Unary インターセプタ
-func NewAuthUnaryInterceptor(logger *zap.Logger, authenticator *auth.Authenticator) grpc.UnaryServerInterceptor {
+// Unary 用 Auth interceptor
+// cmd/server/main.go からは：grpcadapter.NewAuthUnaryInterceptor(logger, authz)
+// と呼ばれる想定（authz は *auth.Authenticator）。
+func NewAuthUnaryInterceptor(logger *zap.Logger, authz *auth.Authenticator) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
-		req any,
+		req interface{},
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
-	) (any, error) {
-		// HealthCheck など認証不要なものをここで除外したければこの条件に追加
-		if info.FullMethod == "/grpc.health.v1.Health/Check" {
-			return handler(ctx, req)
-		}
-
+	) (interface{}, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
 			return nil, status.Error(codes.Unauthenticated, "missing metadata")
 		}
 
-		values := md.Get("authorization")
-		if len(values) == 0 {
-			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
+		raw := md.Get("authorization")
+		if len(raw) == 0 {
+			return nil, status.Error(codes.Unauthenticated, "authorization header not found")
 		}
 
-		raw := values[0]
-		logger.Info("got authorization header", zap.String("raw", raw))
+		logger.Info("got authorization header", zap.String("raw", raw[0]))
 
-		const prefix = "Bearer "
-		if !strings.HasPrefix(raw, prefix) {
+		parts := strings.SplitN(raw[0], " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
 			return nil, status.Error(codes.Unauthenticated, "invalid authorization header format")
 		}
 
-		token := strings.TrimSpace(raw[len(prefix):])
-		if token == "" {
-			return nil, status.Error(codes.Unauthenticated, "invalid authorization header format")
-		}
+		token := parts[1]
 
-		_, err := authenticator.Authenticate(token)
+		// ★ ここで Authenticator 経由で JWT を検証し、sub（userID）を取り出す
+		sub, err := authz.Authenticate(token)
 		if err != nil {
-			if errors.Is(err, auth.ErrInvalidToken) {
-				return nil, status.Error(codes.Unauthenticated, "invalid token")
-			}
-			logger.Error("failed to authenticate token", zap.Error(err))
-			return nil, status.Error(codes.Internal, "internal error")
+			logger.Info("invalid token",
+				zap.String("got", token),
+				zap.Error(err),
+			)
+			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
 
-		// 認証 OK なのでハンドラへ
-		return handler(ctx, req)
+		// userID を context に埋め込む
+		ctxWithUser := WithUserID(ctx, sub)
+
+		return handler(ctxWithUser, req)
 	}
+}
+
+// Stream 用 Auth interceptor
+func NewAuthStreamInterceptor(logger *zap.Logger, authz *auth.Authenticator) grpc.StreamServerInterceptor {
+	return func(
+		srv interface{},
+		ss grpc.ServerStream,
+		info *grpc.StreamServerInfo,
+		handler grpc.StreamHandler,
+	) error {
+		md, ok := metadata.FromIncomingContext(ss.Context())
+		if !ok {
+			return status.Error(codes.Unauthenticated, "missing metadata")
+		}
+
+		raw := md.Get("authorization")
+		if len(raw) == 0 {
+			return status.Error(codes.Unauthenticated, "authorization header not found")
+		}
+
+		logger.Info("got authorization header (stream)", zap.String("raw", raw[0]))
+
+		parts := strings.SplitN(raw[0], " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+			return status.Error(codes.Unauthenticated, "invalid authorization header format")
+		}
+
+		token := parts[1]
+
+		sub, err := authz.Authenticate(token)
+		if err != nil {
+			logger.Info("invalid token (stream)",
+				zap.String("got", token),
+				zap.Error(err),
+			)
+			return status.Error(codes.Unauthenticated, "invalid token")
+		}
+
+		// userID を context に埋め込んだ新しい ctx を作る
+		ctxWithUser := WithUserID(ss.Context(), sub)
+
+		// ctx を差し替えるラッパーで包んで handler に渡す
+		wrapped := &serverStreamWithContext{
+			ServerStream: ss,
+			ctx:          ctxWithUser,
+		}
+
+		return handler(srv, wrapped)
+	}
+}
+
+// context を差し替えるためのラッパー
+type serverStreamWithContext struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *serverStreamWithContext) Context() context.Context {
+	return w.ctx
 }

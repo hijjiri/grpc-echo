@@ -1,4 +1,3 @@
-// internal/usecase/echo/usecase.go
 package echo
 
 import (

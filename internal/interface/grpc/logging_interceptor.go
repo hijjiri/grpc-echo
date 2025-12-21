@@ -1,4 +1,3 @@
-// internal/interface/grpc/logging_interceptor.go
 package grpcadapter
 
 import (

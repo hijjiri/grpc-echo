@@ -31,6 +31,11 @@ func (h *TodoHandler) CreateTodo(ctx context.Context, req *todov1.CreateTodoRequ
 
 // --- List ---
 func (h *TodoHandler) ListTodos(ctx context.Context, req *todov1.ListTodosRequest) (*todov1.ListTodosResponse, error) {
+	if userID, ok := UserIDFromContext(ctx); ok {
+		// ここで userID に応じたフィルタや認可を付けることもできる
+		_ = userID
+	}
+
 	list, err := h.uc.List(ctx)
 	if err != nil {
 		return nil, toGRPCError(err)
