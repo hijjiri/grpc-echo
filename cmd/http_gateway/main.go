@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	authv1 "github.com/hijjiri/grpc-echo/api/auth/v1"
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -45,6 +46,15 @@ func main() {
 		opts,
 	); err != nil {
 		log.Fatalf("failed to register gateway: %v", err)
+	}
+
+	if err := authv1.RegisterAuthServiceHandlerFromEndpoint(
+		ctx,
+		gwMux,
+		grpcAddr,
+		opts,
+	); err != nil {
+		log.Fatalf("failed to register auth gateway: %v", err)
 	}
 
 	// ルート用の mux を作って /healthz と Gateway を共存させる

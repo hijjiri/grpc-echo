@@ -48,12 +48,17 @@ proto:
 	done
 
 	@echo "==> Generating gRPC-Gateway..."
-	# Todoサービスだけ Gateway を生成
+	# Todo / Auth サービスの Gateway を生成
 	protoc \
 	  -I . \
 	  -I third_party \
 	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
 	  api/todo/v1/todo.proto
+	protoc \
+	  -I . \
+	  -I third_party \
+	  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
+	  api/auth/v1/auth.proto
 
 # ---------- Run (Local) ----------
 .PHONY: run-server
