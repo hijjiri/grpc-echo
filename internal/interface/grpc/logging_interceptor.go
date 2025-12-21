@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Unary 用（通常の RPC）
+// NewLoggingUnaryInterceptor logs unary RPCs with method, duration, error and user_id(あれば).
 func NewLoggingUnaryInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
@@ -18,30 +18,32 @@ func NewLoggingUnaryInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor 
 	) (interface{}, error) {
 		start := time.Now()
 
-		// 実際の処理
 		resp, err := handler(ctx, req)
 
 		duration := time.Since(start)
 
-		// エラーかどうかでログレベルを変える
+		// context から userID を取り出す（auth_interceptor で WithUserID 済みの想定）
+		userID, _ := UserIDFromContext(ctx)
+
+		fields := []zap.Field{
+			zap.String("method", info.FullMethod),
+			zap.Duration("duration", duration),
+		}
+		if userID != "" {
+			fields = append(fields, zap.String("user_id", userID))
+		}
+
 		if err != nil {
-			logger.Error("gRPC unary request",
-				zap.String("method", info.FullMethod),
-				zap.Duration("duration", duration),
-				zap.Error(err),
-			)
+			logger.Error("gRPC unary request", append(fields, zap.Error(err))...)
 		} else {
-			logger.Info("gRPC unary request",
-				zap.String("method", info.FullMethod),
-				zap.Duration("duration", duration),
-			)
+			logger.Info("gRPC unary request", fields...)
 		}
 
 		return resp, err
 	}
 }
 
-// Stream 用（今回はおまけ：将来 Streaming を使うとき用）
+// NewLoggingStreamInterceptor logs stream RPCs with method, duration, error and user_id(あれば).
 func NewLoggingStreamInterceptor(logger *zap.Logger) grpc.StreamServerInterceptor {
 	return func(
 		srv interface{},
@@ -55,17 +57,22 @@ func NewLoggingStreamInterceptor(logger *zap.Logger) grpc.StreamServerIntercepto
 
 		duration := time.Since(start)
 
+		// stream から context を取って userID を取得
+		ctx := ss.Context()
+		userID, _ := UserIDFromContext(ctx)
+
+		fields := []zap.Field{
+			zap.String("method", info.FullMethod),
+			zap.Duration("duration", duration),
+		}
+		if userID != "" {
+			fields = append(fields, zap.String("user_id", userID))
+		}
+
 		if err != nil {
-			logger.Error("gRPC stream request",
-				zap.String("method", info.FullMethod),
-				zap.Duration("duration", duration),
-				zap.Error(err),
-			)
+			logger.Error("gRPC stream request", append(fields, zap.Error(err))...)
 		} else {
-			logger.Info("gRPC stream request",
-				zap.String("method", info.FullMethod),
-				zap.Duration("duration", duration),
-			)
+			logger.Info("gRPC stream request", fields...)
 		}
 
 		return err
