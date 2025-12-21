@@ -70,7 +70,9 @@ build-server:
 	$(GO_BUILD) ./cmd/server
 
 # ---------- Docker ----------
-.PHONY: docker-build docker-run docker-stop
+.PHONY: docker-build docker-run docker-stop \
+        docker-build-gw docker-run-gw docker-stop-gw
+
 docker-build:
 	docker build -t grpc-echo:latest .
 
@@ -82,7 +84,25 @@ docker-run:
 	  grpc-echo
 
 docker-stop:
-	-docker stop grpc-echo || true
+	- docker stop grpc-echo || true
+
+# HTTP Gateway イメージをビルド
+docker-build-gw:
+	docker build -f Dockerfile.http_gateway -t grpc-http-gateway:latest .
+
+# ローカルで HTTP Gateway を起動
+# - ホスト側のポートは HTTP_GATEWAY_PORT（デフォルト 8081）
+# - gRPC バックエンドは GRPC_ADDR（デフォルト localhost:50051）
+docker-run-gw:
+	docker run --rm \
+	  -p $(HTTP_GATEWAY_PORT):8081 \
+	  -e GRPC_SERVER_ADDR=$(GRPC_ADDR) \
+	  -e HTTP_LISTEN_ADDR=:8081 \
+	  --name grpc-http-gateway \
+	  grpc-http-gateway:latest
+
+docker-stop-gw:
+	- docker stop grpc-http-gateway || true
 
 # ---------- Docker Compose ----------
 .PHONY: compose-build compose-db compose-down compose-logs compose-ps
@@ -148,7 +168,7 @@ run-gateway:
 	$(GO_RUN) ./cmd/http_gateway
 
 # ---------- Kubernetes Utility ----------
-.PHONY: k-build k-pods k-grpc k-grpc-logs \
+.PHONY: k-build k-gw-build k-pods k-grpc k-grpc-logs \
         k-gw k-gw-logs \
         k-graf k-graf-logs \
         k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
@@ -161,6 +181,13 @@ k-build:
 	kind load docker-image --name $(KIND_CLUSTER) grpc-echo:latest
 	$(KUBECTL) rollout restart deployment grpc-echo -n $(K8S_NAMESPACE)
 	$(KUBECTL) get pods -l app=grpc-echo -n $(K8S_NAMESPACE)
+
+# HTTP Gateway 用イメージをビルド → kind にロード → Deployment 再起動
+k-gw-build:
+	docker build -f Dockerfile.http_gateway -t grpc-http-gateway:latest .
+	kind load docker-image --name $(KIND_CLUSTER) grpc-http-gateway:latest
+	$(KUBECTL) rollout restart deployment http-gateway -n $(K8S_NAMESPACE)
+	$(KUBECTL) get pods -l app=http-gateway -n $(K8S_NAMESPACE)
 
 # Pod 一覧確認
 k-pods:
