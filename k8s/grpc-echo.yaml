@@ -3,7 +3,8 @@ kind: Deployment
 metadata:
   name: grpc-echo
 spec:
-  replicas: 1
+  # ★ Replica 数を 2 に増やす
+  replicas: 2
   selector:
     matchLabels:
       app: grpc-echo
@@ -19,28 +20,22 @@ spec:
           ports:
             - containerPort: 50051  # gRPC
             - containerPort: 9464   # metrics
-
-          # ★ ConfigMap / Secret から環境変数をまとめて注入
           envFrom:
             - configMapRef:
                 name: grpc-echo-config
             - secretRef:
                 name: grpc-echo-secret
-
-          # ---- ヘルスチェック (開発用のゆるい設定) ----
+          # ヘルスチェック
           livenessProbe:
             tcpSocket:
               port: 50051
             initialDelaySeconds: 5
             periodSeconds: 10
-
           readinessProbe:
             tcpSocket:
               port: 50051
             initialDelaySeconds: 2
             periodSeconds: 5
-
-          # ---- リソース制限 (開発用の控えめ設定) ----
           resources:
             requests:
               cpu: "50m"
