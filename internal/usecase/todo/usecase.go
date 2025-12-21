@@ -3,32 +3,53 @@ package todo_usecase
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
-	"go.uber.org/zap"
-
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
 )
 
+// ---- 公開エラー（既存テストと互換） ----
+
 var (
-	// ドメイン側のエラーを再利用（alias）
-	ErrEmptyTitle = domain_todo.ErrEmptyTitle
-	ErrInvalidID  = domain_todo.ErrInvalidID
-
-	// ユースケース固有なので usecase 側で定義のまま
+	// 空タイトル
+	ErrEmptyTitle = errors.New("empty title")
+	// 不正なID
+	ErrInvalidID = errors.New("invalid id")
+	// 見つからない
 	ErrNotFound = errors.New("todo not found")
+)
 
+// ---- メトリクス ----
+
+var (
 	meter metric.Meter
 
 	todoCreatedCounter metric.Int64Counter
 	todoListCounter    metric.Int64Counter
 )
 
-// ===== 外部に公開する Usecase インターフェース =====
+func init() {
+	m := otel.Meter("github.com/hijjiri/grpc-echo/internal/usecase/todo")
 
+	todoCreatedCounter, _ = m.Int64Counter(
+		"todo_created_total",
+		metric.WithDescription("Number of todos created"),
+	)
+
+	todoListCounter, _ = m.Int64Counter(
+		"todo_list_total",
+		metric.WithDescription("Number of times todos were listed"),
+	)
+
+	meter = m
+}
+
+// ---- Usecase インターフェース ----
+
+// 既存の public API はそのまま
 type Usecase interface {
 	Create(ctx context.Context, title string) (*domain_todo.Todo, error)
 	List(ctx context.Context) ([]*domain_todo.Todo, error)
@@ -36,140 +57,177 @@ type Usecase interface {
 	Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error)
 }
 
-// ===== 実装 =====
+// ---- 実装 ----
 
+// CQRS 的に、Read / Write を分けて持つ
 type usecase struct {
-	repo   domain_todo.Repository
-	logger *zap.Logger
+	readRepo  domain_todo.ReadRepository
+	writeRepo domain_todo.WriteRepository
+	logger    *zap.Logger
 }
 
+// 既存コード・テスト用：1つの Repository を両方に使う
 func New(repo domain_todo.Repository, logger *zap.Logger) Usecase {
-	initMetrics()
 	return &usecase{
-		repo:   repo,
-		logger: logger,
+		readRepo:  repo,
+		writeRepo: repo,
+		logger:    logger,
 	}
 }
 
-func (u *usecase) log() *zap.Logger {
-	return u.logger
+// 将来、読み取りと書き込みで別バックエンドを使いたくなったとき用
+// （今は使わなくてOK）
+func NewWithRepos(
+	readRepo domain_todo.ReadRepository,
+	writeRepo domain_todo.WriteRepository,
+	logger *zap.Logger,
+) Usecase {
+	return &usecase{
+		readRepo:  readRepo,
+		writeRepo: writeRepo,
+		logger:    logger,
+	}
 }
 
-func initMetrics() {
-	meter = otel.Meter("github.com/hijjiri/grpc-echo/internal/usecase/todo")
-
-	todoCreatedCounter, _ = meter.Int64Counter(
-		"todo_created_total",
-		metric.WithDescription("Number of todos created"),
-	)
-
-	todoListCounter, _ = meter.Int64Counter(
-		"todo_list_total",
-		metric.WithDescription("Number of times todos were listed"),
-	)
-}
+// ---- Create ----
 
 func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, error) {
-	// ★ ドメインファクトリにタイトルのバリデーションを任せる
+	if title == "" {
+		u.logger.Warn("failed to create todo: empty title")
+		return nil, ErrEmptyTitle
+	}
+
+	// ドメインのファクトリで不変条件をチェック
 	t, err := domain_todo.NewTodo(title)
 	if err != nil {
-		// ErrEmptyTitle などのドメインエラー
-		u.logger.Warn("invalid todo for create",
-			zap.String("title", title),
-			zap.Error(err),
-		)
+		// ドメインエラー → usecase のエラーにマッピング
+		if errors.Is(err, domain_todo.ErrEmptyTitle) {
+			return nil, ErrEmptyTitle
+		}
 		return nil, err
 	}
 
-	created, err := u.repo.Create(ctx, t)
+	created, err := u.writeRepo.Create(ctx, t)
 	if err != nil {
 		u.logger.Error("failed to create todo in repo",
 			zap.String("title", title),
 			zap.Error(err),
 		)
-		return nil, fmt.Errorf("create todo: %w", err)
+		return nil, err
 	}
 
-	// 既存のメトリクス・ログはそのままでOK
-	return created, nil
-}
-
-func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
-	list, err := u.repo.List(ctx)
-	if err != nil {
-		u.log().Error("failed to list todos", zap.Error(err))
-		return nil, fmt.Errorf("list todo: %w", err)
-	}
-	u.logger.Info("todos listed (usecase)",
-		zap.Int("count", len(list)),
-	)
-
-	// カウント
-	todoListCounter.Add(ctx, 1,
+	// メトリクス
+	todoCreatedCounter.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("source", "grpc")),
 	)
 
-	u.log().Info("todos listed (usecase)", zap.Int("count", len(list)))
-	return list, nil
+	u.logger.Info("todo created (usecase)",
+		zap.Int64("id", created.ID),
+		zap.String("title", created.Title),
+	)
+
+	return created, nil
 }
 
-func (u *usecase) Delete(ctx context.Context, id int64) error {
-	// ★ ID バリデーションをドメイン側に委譲
-	if err := domain_todo.ValidateID(id); err != nil {
-		u.logger.Warn("invalid id for delete",
-			zap.Int64("id", id),
-			zap.Error(err),
-		)
-		return err // = ErrInvalidID
-	}
+// ---- List ----
 
-	ok, err := u.repo.Delete(ctx, id)
+func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
+	list, err := u.readRepo.List(ctx)
 	if err != nil {
-		u.logger.Error("failed to delete todo in repo",
-			zap.Int64("id", id),
-			zap.Error(err),
-		)
-		return fmt.Errorf("delete todo id=%d: %w", id, err)
-	}
-	if !ok {
-		u.logger.Warn("todo not found", zap.Int64("id", id))
-		return ErrNotFound
-	}
-
-	return nil
-}
-
-func (u *usecase) Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error) {
-	// ID チェック
-	if err := domain_todo.ValidateID(id); err != nil {
-		u.logger.Warn("invalid id for update",
-			zap.Int64("id", id),
+		u.logger.Error("failed to list todos",
 			zap.Error(err),
 		)
 		return nil, err
 	}
 
-	// Aggregate を組み立てて、タイトル・完了状態を更新
-	t := &domain_todo.Todo{
-		ID:   id,
-		Done: done,
-	}
-	if err := t.ChangeTitle(title); err != nil {
-		u.logger.Warn("invalid title for update",
+	todoListCounter.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("source", "grpc")),
+	)
+
+	u.logger.Info("todos listed (usecase)",
+		zap.Int("count", len(list)),
+	)
+
+	return list, nil
+}
+
+// ---- Delete ----
+
+func (u *usecase) Delete(ctx context.Context, id int64) error {
+	// ID バリデーションはドメイン側のヘルパーに委譲
+	if err := domain_todo.ValidateID(id); err != nil {
+		u.logger.Warn("invalid id for delete",
 			zap.Int64("id", id),
 			zap.Error(err),
 		)
-		return nil, err // ErrEmptyTitle 想定
+		return ErrInvalidID
 	}
 
-	updated, err := u.repo.Update(ctx, t)
+	deleted, err := u.writeRepo.Delete(ctx, id)
+	if err != nil {
+		u.logger.Error("failed to delete todo in repo",
+			zap.Int64("id", id),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	if !deleted {
+		u.logger.Warn("todo not found for delete",
+			zap.Int64("id", id),
+		)
+		return ErrNotFound
+	}
+
+	u.logger.Info("todo deleted (usecase)",
+		zap.Int64("id", id),
+	)
+
+	return nil
+}
+
+// ---- Update ----
+
+func (u *usecase) Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error) {
+	if err := domain_todo.ValidateID(id); err != nil {
+		u.logger.Warn("invalid id for update",
+			zap.Int64("id", id),
+			zap.Error(err),
+		)
+		return nil, ErrInvalidID
+	}
+
+	// ドメインエンティティを組み立て
+	t := &domain_todo.Todo{
+		ID:    id,
+		Title: title,
+		Done:  done,
+	}
+
+	// タイトルのバリデーションはドメインメソッドに委譲
+	if err := t.ChangeTitle(title); err != nil {
+		if errors.Is(err, domain_todo.ErrEmptyTitle) {
+			return nil, ErrEmptyTitle
+		}
+		return nil, err
+	}
+
+	updated, err := u.writeRepo.Update(ctx, t)
 	if err != nil {
 		u.logger.Error("failed to update todo in repo",
 			zap.Int64("id", id),
+			zap.String("title", title),
+			zap.Bool("done", done),
 			zap.Error(err),
 		)
-		return nil, fmt.Errorf("update todo id=%d: %w", id, err)
+		return nil, err
 	}
+
+	u.logger.Info("todo updated (usecase)",
+		zap.Int64("id", updated.ID),
+		zap.String("title", updated.Title),
+		zap.Bool("done", updated.Done),
+	)
 
 	return updated, nil
 }
