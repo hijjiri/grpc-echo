@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -29,7 +30,7 @@ func NewAuthenticator(logger *zap.Logger, secret string) *Authenticator {
 
 // Authorization ヘッダに載ってきた生のトークンを検証する
 // 正常なら subject(ここでは "sub" クレーム) を返す
-func (a *Authenticator) Authenticate(rawToken string) (string, error) {
+func (a *Authenticator) Authenticate(ctx context.Context, rawToken string) (string, error) {
 	token, err := jwt.Parse(rawToken, func(t *jwt.Token) (any, error) {
 		// HS256 以外は弾く
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {

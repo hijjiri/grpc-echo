@@ -143,16 +143,17 @@ func main() {
 	authSecret := getenv("AUTH_SECRET", "my-dev-secret-key")
 	authz := auth.NewAuthenticator(logger, authSecret)
 
+	// ---------- gRPC Interceptors ----------
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
-		grpcadapter.NewRecoveryUnaryInterceptor(logger),
-		grpcadapter.NewLoggingUnaryInterceptor(logger),
 		grpcadapter.NewAuthUnaryInterceptor(logger, authz),
+		grpcadapter.NewLoggingUnaryInterceptor(logger),
+		grpcadapter.NewRecoveryUnaryInterceptor(logger),
 	}
 
 	streamInterceptors := []grpc.StreamServerInterceptor{
-		grpcadapter.NewRecoveryStreamInterceptor(logger),
-		grpcadapter.NewLoggingStreamInterceptor(logger),
 		grpcadapter.NewAuthStreamInterceptor(logger, authz),
+		grpcadapter.NewLoggingStreamInterceptor(logger),
+		grpcadapter.NewRecoveryStreamInterceptor(logger),
 	}
 
 	// ---------- gRPC Server ----------

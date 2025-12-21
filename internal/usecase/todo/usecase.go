@@ -3,6 +3,7 @@ package todo_usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
 	"go.uber.org/zap"
@@ -66,7 +67,6 @@ func initMetrics() {
 	)
 }
 
-// Create ユースケース
 func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, error) {
 	if title == "" {
 		u.log().Warn("failed to create todo: empty title")
@@ -84,7 +84,7 @@ func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, 
 			zap.String("title", title),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, fmt.Errorf("create todo: %w", err)
 	}
 
 	u.logger.Info("todo created (usecase)",
@@ -105,12 +105,11 @@ func (u *usecase) Create(ctx context.Context, title string) (*domain_todo.Todo, 
 	return created, nil
 }
 
-// List ユースケース
 func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
 	list, err := u.repo.List(ctx)
 	if err != nil {
 		u.log().Error("failed to list todos", zap.Error(err))
-		return nil, err
+		return nil, fmt.Errorf("list todo: %w", err)
 	}
 	u.logger.Info("todos listed (usecase)",
 		zap.Int("count", len(list)),
@@ -125,7 +124,6 @@ func (u *usecase) List(ctx context.Context) ([]*domain_todo.Todo, error) {
 	return list, nil
 }
 
-// Delete ユースケース
 func (u *usecase) Delete(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return ErrInvalidID
@@ -133,7 +131,7 @@ func (u *usecase) Delete(ctx context.Context, id int64) error {
 
 	ok, err := u.repo.Delete(ctx, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("delete todo id=%d: %w", id, err)
 	}
 	if !ok {
 		return ErrNotFound
@@ -143,9 +141,11 @@ func (u *usecase) Delete(ctx context.Context, id int64) error {
 
 func (u *usecase) Update(ctx context.Context, id int64, title string, done bool) (*domain_todo.Todo, error) {
 	if id <= 0 {
+		u.logger.Warn("invalid id for update", zap.Int64("id", id))
 		return nil, ErrInvalidID
 	}
 	if title == "" {
+		u.logger.Warn("empty title for update", zap.Int64("id", id))
 		return nil, ErrEmptyTitle
 	}
 
@@ -155,5 +155,15 @@ func (u *usecase) Update(ctx context.Context, id int64, title string, done bool)
 		Done:  done,
 	}
 
-	return u.repo.Update(ctx, t)
+	updated, err := u.repo.Update(ctx, t)
+	if err != nil {
+		u.logger.Error("failed to update todo in repo",
+			zap.Int64("id", id),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("update todo id=%d: %w", id, err) // ★
+	}
+
+	// ここも既存のメトリクス・ログがあればそのまま
+	return updated, nil
 }

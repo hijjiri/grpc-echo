@@ -8,29 +8,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-// NewLoggingUnaryInterceptor logs unary RPCs with method, duration, error and user_id(あれば).
+// ----- Unary -----
+
 func NewLoggingUnaryInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
-	return func(
-		ctx context.Context,
-		req interface{},
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 
 		resp, err := handler(ctx, req)
 
-		duration := time.Since(start)
-
-		// context から userID を取り出す（auth_interceptor で WithUserID 済みの想定）
-		userID, _ := UserIDFromContext(ctx)
-
 		fields := []zap.Field{
 			zap.String("method", info.FullMethod),
-			zap.Duration("duration", duration),
+			zap.Duration("duration", time.Since(start)),
 		}
-		if userID != "" {
+
+		if userID, ok := UserIDFromContext(ctx); ok {
 			fields = append(fields, zap.String("user_id", userID))
+		}
+		if rid, ok := RequestIDFromContext(ctx); ok {
+			fields = append(fields, zap.String("request_id", rid))
 		}
 
 		if err != nil {
@@ -43,31 +38,27 @@ func NewLoggingUnaryInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor 
 	}
 }
 
-// NewLoggingStreamInterceptor logs stream RPCs with method, duration, error and user_id(あれば).
+// ----- Stream -----
+
 func NewLoggingStreamInterceptor(logger *zap.Logger) grpc.StreamServerInterceptor {
-	return func(
-		srv interface{},
-		ss grpc.ServerStream,
-		info *grpc.StreamServerInfo,
-		handler grpc.StreamHandler,
-	) error {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		start := time.Now()
-
-		err := handler(srv, ss)
-
-		duration := time.Since(start)
-
-		// stream から context を取って userID を取得
 		ctx := ss.Context()
-		userID, _ := UserIDFromContext(ctx)
 
 		fields := []zap.Field{
 			zap.String("method", info.FullMethod),
-			zap.Duration("duration", duration),
 		}
-		if userID != "" {
+
+		if userID, ok := UserIDFromContext(ctx); ok {
 			fields = append(fields, zap.String("user_id", userID))
 		}
+		if rid, ok := RequestIDFromContext(ctx); ok {
+			fields = append(fields, zap.String("request_id", rid))
+		}
+
+		err := handler(srv, ss)
+
+		fields = append(fields, zap.Duration("duration", time.Since(start)))
 
 		if err != nil {
 			logger.Error("gRPC stream request", append(fields, zap.Error(err))...)
