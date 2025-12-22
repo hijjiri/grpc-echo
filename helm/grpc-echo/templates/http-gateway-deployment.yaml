@@ -1,3 +1,8 @@
+{{- if .Values.gateway.enabled }}
+
+{{- $globalTag := default "latest" .Values.global.imageTag }}
+{{- $tag := default $globalTag .Values.gateway.image.tag }}
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,24 +21,15 @@ spec:
     spec:
       containers:
         - name: http-gateway
-          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          image: "{{ .Values.gateway.image.repository }}:{{ $tag }}"
           imagePullPolicy: {{ .Values.gateway.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - containerPort: 8081
-
           env:
             - name: GRPC_SERVER_ADDR
               value: "grpc-echo:50051"
             - name: HTTP_LISTEN_ADDR
               value: ":8081"
-
-          resources:
-            requests:
-              cpu: {{ .Values.gateway.resources.requests.cpu | quote }}
-              memory: {{ .Values.gateway.resources.requests.memory | quote }}
-            limits:
-              cpu: {{ .Values.gateway.resources.limits.cpu | quote }}
-              memory: {{ .Values.gateway.resources.limits.memory | quote }}
 
           livenessProbe:
             httpGet:
@@ -41,10 +37,14 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
-
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8081
             initialDelaySeconds: 3
             periodSeconds: 5
+
+          resources:
+{{ toYaml .Values.gateway.resources | nindent 12 }}
+
+{{- end }}

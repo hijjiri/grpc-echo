@@ -1,9 +1,12 @@
+{{- $globalTag := default "latest" .Values.global.imageTag }}
+{{- $tag := default $globalTag .Values.grpcEcho.image.tag }}
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grpc-echo
 spec:
-  replicas: {{ .Values.grpcEcho.replicaCount }}
+  replicas: {{ .Values.grpcEcho.replicaCount | default 2 }}
   selector:
     matchLabels:
       app: grpc-echo
@@ -14,18 +17,17 @@ spec:
     spec:
       containers:
         - name: grpc-echo
-          image: "{{ .Values.grpcEcho.image.repository }}:{{ .Values.grpcEcho.image.tag }}"
-          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy }}
+          image: "{{ .Values.grpcEcho.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy | default "IfNotPresent" }}
           ports:
-            - containerPort: 50051  # gRPC
-            - containerPort: 9464   # metrics
+            - containerPort: 50051
+            - containerPort: 9464
           envFrom:
             - configMapRef:
                 name: grpc-echo-config
             - secretRef:
                 name: grpc-echo-secret
 
-          # liveness / readiness
           livenessProbe:
             tcpSocket:
               port: 50051
@@ -38,9 +40,4 @@ spec:
             periodSeconds: 5
 
           resources:
-            requests:
-              cpu: {{ .Values.grpcEcho.resources.requests.cpu | quote }}
-              memory: {{ .Values.grpcEcho.resources.requests.memory | quote }}
-            limits:
-              cpu: {{ .Values.grpcEcho.resources.limits.cpu | quote }}
-              memory: {{ .Values.grpcEcho.resources.limits.memory | quote }}
+{{ toYaml .Values.grpcEcho.resources | nindent 12 }}

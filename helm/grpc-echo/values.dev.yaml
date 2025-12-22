@@ -1,3 +1,6 @@
+global:
+  imageTag: "dev"
+
 config:
   authSecret: "my-dev-secret-key"
   db:
@@ -12,57 +15,21 @@ grpcEcho:
   replicaCount: 2
   image:
     repository: "grpc-echo"
-    tag: "dev"
-    pullPolicy: IfNotPresent
-  service:
-    type: ClusterIP
-    grpcPort: 50051
-    metricsPort: 9464
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
-      cpu: "500m"
-      memory: "256Mi"
-  probes:
-    liveness:
-      initialDelaySeconds: 5
-      periodSeconds: 10
-    readiness:
-      initialDelaySeconds: 2
-      periodSeconds: 5
+    # dev を強制したいなら明示してもOK（未指定でも global.imageTag=dev が効く）
+    tag: ""
+    pullPolicy: "IfNotPresent"
 
 gateway:
   enabled: true
-  replicaCount: 1
   image:
     repository: "grpc-http-gateway"
-    tag: "dev"
-    pullPolicy: IfNotPresent
+    tag: ""
+    pullPolicy: "IfNotPresent"
   service:
-    type: ClusterIP
+    type: "ClusterIP"
     port: 8081
-    targetPort: 8081
-  env:
-    grpcServerAddr: "grpc-echo:50051"
-    httpListenAddr: ":8081"
-  resources:
-    requests:
-      cpu: "50m"
-      memory: "64Mi"
-    limits:
-      cpu: "200m"
-      memory: "128Mi"
-  probes:
-    liveness:
-      initialDelaySeconds: 5
-      periodSeconds: 10
-    readiness:
-      initialDelaySeconds: 3
-      periodSeconds: 5
 
 ingress:
   enabled: true
-  className: nginx
-  host: grpc-echo.local
+  className: "nginx"
+  host: "grpc-echo.local"
