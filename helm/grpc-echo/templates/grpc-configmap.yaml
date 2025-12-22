@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grpc-echo-config
+data:
+  DB_HOST: {{ .Values.config.db.host | quote }}
+  DB_PORT: "{{ .Values.config.db.port }}"
+  DB_NAME: {{ .Values.config.db.name | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterEndpoint | quote }}

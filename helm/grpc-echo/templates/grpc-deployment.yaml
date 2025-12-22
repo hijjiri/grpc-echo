@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc-echo
+spec:
+  replicas: {{ .Values.grpcEcho.replicaCount }}
+  selector:
+    matchLabels:
+      app: grpc-echo
+  template:
+    metadata:
+      labels:
+        app: grpc-echo
+    spec:
+      containers:
+        - name: grpc-echo
+          image: "{{ .Values.grpcEcho.image.repository }}:{{ .Values.grpcEcho.image.tag }}"
+          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy }}
+          ports:
+            - containerPort: 50051  # gRPC
+            - containerPort: 9464   # metrics
+          envFrom:
+            - configMapRef:
+                name: grpc-echo-config
+            - secretRef:
+                name: grpc-echo-secret
+
+          # liveness / readiness
+          livenessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 2
+            periodSeconds: 5
+
+          resources:
+            requests:
+              cpu: {{ .Values.grpcEcho.resources.requests.cpu | quote }}
+              memory: {{ .Values.grpcEcho.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.grpcEcho.resources.limits.cpu | quote }}
+              memory: {{ .Values.grpcEcho.resources.limits.memory | quote }}

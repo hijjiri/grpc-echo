@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-gateway
+  labels:
+    app: http-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http-gateway
+  template:
+    metadata:
+      labels:
+        app: http-gateway
+    spec:
+      containers:
+        - name: http-gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 8081
+
+          env:
+            - name: GRPC_SERVER_ADDR
+              value: "grpc-echo:50051"
+            - name: HTTP_LISTEN_ADDR
+              value: ":8081"
+
+          resources:
+            requests:
+              cpu: {{ .Values.gateway.resources.requests.cpu | quote }}
+              memory: {{ .Values.gateway.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.gateway.resources.limits.cpu | quote }}
+              memory: {{ .Values.gateway.resources.limits.memory | quote }}
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 5
