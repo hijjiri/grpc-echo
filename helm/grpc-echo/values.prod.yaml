@@ -11,19 +11,12 @@ config:
     password: "prod-db-password"
   otelExporterEndpoint: "otel-collector:4317"
 
+# prod も “差分だけ”
 grpcEcho:
-  terminationGracePeriodSeconds: 30
   replicaCount: 2
-  image:
-    repository: "grpc-echo"
-    pullPolicy: "IfNotPresent"
 
 gateway:
-  terminationGracePeriodSeconds: 30
   enabled: true
-  image:
-    repository: "grpc-http-gateway"
-    pullPolicy: "IfNotPresent"
 
 ingress:
   enabled: true

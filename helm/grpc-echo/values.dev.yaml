@@ -11,19 +11,12 @@ config:
     password: "root"
   otelExporterEndpoint: "otel-collector:4317"
 
+# dev は “差分だけ” でOK（他は values.yaml を継承）
 grpcEcho:
-  terminationGracePeriodSeconds: 30
   replicaCount: 2
-  image:
-    repository: "grpc-echo"
-    pullPolicy: "IfNotPresent"
 
 gateway:
-  terminationGracePeriodSeconds: 30
   enabled: true
-  image:
-    repository: "grpc-http-gateway"
-    pullPolicy: "IfNotPresent"
 
 ingress:
   enabled: true

@@ -15,14 +15,18 @@ config:
 
 # ---- grpc-echo (gRPC server) ----
 grpcEcho:
+  terminationGracePeriodSeconds: 30
+
   replicaCount: 2
   image:
     repository: "grpc-echo"
     pullPolicy: "IfNotPresent"
+
   service:
     type: "ClusterIP"
     grpcPort: 50051
     metricsPort: 9464
+
   resources:
     requests:
       cpu: "100m"
@@ -30,6 +34,7 @@ grpcEcho:
     limits:
       cpu: "500m"
       memory: "256Mi"
+
   probes:
     liveness:
       initialDelaySeconds: 5
@@ -40,15 +45,20 @@ grpcEcho:
 
 # ---- http-gateway ----
 gateway:
+  terminationGracePeriodSeconds: 30
+
   enabled: true
   replicaCount: 1
+
   image:
     repository: "grpc-http-gateway"
     pullPolicy: "IfNotPresent"
+
   service:
     type: "ClusterIP"
     port: 8081
     targetPort: 8081
+
   resources:
     requests:
       cpu: "50m"
@@ -56,6 +66,7 @@ gateway:
     limits:
       cpu: "200m"
       memory: "128Mi"
+
   probes:
     liveness:
       initialDelaySeconds: 5
