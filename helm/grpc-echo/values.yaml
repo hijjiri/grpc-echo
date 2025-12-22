@@ -10,35 +10,56 @@ config:
 
   otelExporterEndpoint: "otel-collector:4317"
 
-# gRPC / metrics Service の設定
-service:
-  grpc:
+# gRPC server (grpc-echo)
+grpcEcho:
+  replicaCount: 2
+
+  image:
+    repository: "grpc-echo"
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
     type: ClusterIP
-    port: 50051
+    grpcPort: 50051
+    metricsPort: 9464
 
-  metrics:
-    type: ClusterIP
-    port: 9464
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
 
-# Ingress (Ingress → http-gateway Service)
-ingress:
-  enabled: true
-  className: nginx
-  host: grpc-echo.local
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 2
+      periodSeconds: 5
 
-# HTTP Gateway の設定
+# HTTP gateway
 gateway:
   enabled: true
+
+  replicaCount: 1
 
   image:
     repository: "grpc-http-gateway"
     tag: "latest"
-    pullPolicy: "IfNotPresent"
+    pullPolicy: IfNotPresent
 
   service:
-    type: "ClusterIP"
+    type: ClusterIP
     port: 8081
     targetPort: 8081
+
+  # gRPC backend reference inside k8s
+  env:
+    grpcServerAddr: "grpc-echo:50051"
+    httpListenAddr: ":8081"
 
   resources:
     requests:
@@ -48,19 +69,15 @@ gateway:
       cpu: "200m"
       memory: "128Mi"
 
-# gRPC サーバ (grpc-echo Deployment) の設定
-grpcEcho:
-  replicaCount: 2
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 5
 
-  image:
-    repository: "grpc-echo"
-    tag: "latest"
-    pullPolicy: "IfNotPresent"
-
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
-      cpu: "500m"
-      memory: "256Mi"
+ingress:
+  enabled: true
+  className: nginx
+  host: grpc-echo.local

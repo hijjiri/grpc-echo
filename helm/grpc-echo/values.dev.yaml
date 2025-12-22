@@ -1,33 +1,52 @@
 config:
   authSecret: "my-dev-secret-key"
-
   db:
     host: "mysql"
     port: 3306
     name: "grpcdb"
     user: "root"
     password: "root"
-
   otelExporterEndpoint: "otel-collector:4317"
 
-ingress:
-  enabled: true
-  className: nginx
-  host: grpc-echo.local
+grpcEcho:
+  replicaCount: 2
+  image:
+    repository: "grpc-echo"
+    tag: "dev"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    grpcPort: 50051
+    metricsPort: 9464
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 2
+      periodSeconds: 5
 
 gateway:
   enabled: true
-
+  replicaCount: 1
   image:
     repository: "grpc-http-gateway"
-    tag: "latest"         # ← ここを latest に戻す
-    pullPolicy: "IfNotPresent"
-
+    tag: "dev"
+    pullPolicy: IfNotPresent
   service:
-    type: "ClusterIP"
+    type: ClusterIP
     port: 8081
     targetPort: 8081
-
+  env:
+    grpcServerAddr: "grpc-echo:50051"
+    httpListenAddr: ":8081"
   resources:
     requests:
       cpu: "50m"
@@ -35,7 +54,15 @@ gateway:
     limits:
       cpu: "200m"
       memory: "128Mi"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 5
 
-grpcEcho:
-  image:
-    tag: "latest"         # ← ここも latest に戻す
+ingress:
+  enabled: true
+  className: nginx
+  host: grpc-echo.local

@@ -1,43 +1,68 @@
-# helm/grpc-echo/values.prod.yaml
-
 config:
   authSecret: "super-secret-in-prod"
-
   db:
     host: "prod-mysql"
     port: 3306
     name: "grpcdb"
     user: "appuser"
     password: "prod-db-password"
-
   otelExporterEndpoint: "otel-collector:4317"
+
+grpcEcho:
+  replicaCount: 2
+  image:
+    repository: "grpc-echo"
+    tag: "prod"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    grpcPort: 50051
+    metricsPort: 9464
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 2
+      periodSeconds: 5
+
+gateway:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: "grpc-http-gateway"
+    tag: "prod"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8081
+    targetPort: 8081
+  env:
+    grpcServerAddr: "grpc-echo:50051"
+    httpListenAddr: ":8081"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 5
 
 ingress:
   enabled: true
   className: nginx
   host: grpc-echo.local
-
-gateway:
-  enabled: true
-
-  image:
-    repository: "grpc-http-gateway"
-    tag: "prod"
-    pullPolicy: "IfNotPresent"
-
-  service:
-    type: "ClusterIP"
-    port: 8081
-    targetPort: 8081
-
-  resources:
-    requests:
-      cpu: "50m"
-      memory: "64Mi"
-    limits:
-      cpu: "200m"
-      memory: "128Mi"
-
-grpcEcho:
-  image:
-    tag: "prod"

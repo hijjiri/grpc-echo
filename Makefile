@@ -1,15 +1,19 @@
-# ---------- Config ----------
-GO          ?= go
-GO_RUN      ?= $(GO) run
-GO_BUILD    ?= $(GO) build
-GRPCURL     ?= grpcurl
-DOCKER      ?= docker
-DOCKER_COMPOSE ?= docker-compose
-KUBECTL     ?= kubectl
-HELM        ?= helm
-KIND        ?= kind
+SHELL := /usr/bin/env bash
 
-# ---------- Addresses (Local access) ----------
+# ---------- Basic ----------
+GO              ?= go
+GO_RUN          ?= $(GO) run
+GO_BUILD        ?= $(GO) build
+GRPCURL         ?= grpcurl
+DOCKER_COMPOSE  ?= docker-compose
+KUBECTL         ?= kubectl
+HELM            ?= helm
+KIND            ?= kind
+
+K8S_NAMESPACE   ?= default
+KIND_CLUSTER    ?= grpc-echo
+
+# ---------- Addresses (local) ----------
 GRPC_ADDR          ?= localhost:50051
 HTTP_GATEWAY_ADDR  ?= localhost:8081
 METRICS_ADDR       ?= localhost:9464
@@ -23,31 +27,7 @@ HTTP_GATEWAY_PORT  := $(word 2,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
 METRICS_HOST       := $(word 1,$(subst :, ,$(METRICS_ADDR)))
 METRICS_PORT       := $(word 2,$(subst :, ,$(METRICS_ADDR)))
 
-SERVICE   ?=
-
-# ---------- Kubernetes / kind ----------
-K8S_NAMESPACE ?= default
-KIND_CLUSTER  ?= grpc-echo
-
-# Ingress (kind + ingress-nginx)
-INGRESS_NS          ?= ingress-nginx
-INGRESS_SVC         ?= ingress-nginx-controller
-INGRESS_LOCAL_PORT  ?= 8080
-INGRESS_HOST        ?= grpc-echo.local
-INGRESS_URL         ?= http://$(INGRESS_HOST):$(INGRESS_LOCAL_PORT)
-
-# ---------- Helm ----------
-HELM_RELEASE ?= grpc-echo
-HELM_CHART   ?= ./helm/grpc-echo
-# default values (dev)
-HELM_VALUES  ?= $(HELM_CHART)/values.dev.yaml
-
-# ---------- Images ----------
-# tag is the main "switch" to avoid latest-hell.
-IMAGE_TAG ?= dev
-
-GRPC_IMAGE ?= grpc-echo:$(IMAGE_TAG)
-GW_IMAGE   ?= grpc-http-gateway:$(IMAGE_TAG)
+SERVICE ?=
 
 # ---------- JWT ----------
 JWT_SECRET ?= my-dev-secret-key
@@ -56,18 +36,42 @@ JWT_SECRET ?= my-dev-secret-key
 PROTO_DIRS := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
 GATEWAY_PROTOS := $(shell find api -name '*.proto' -print)
 
-# ---------- Helpers ----------
-# Usage: $(call pod,app=mysql)
-define pod
-$(shell $(KUBECTL) get pod -n $(K8S_NAMESPACE) -l $(1) -o jsonpath='{.items[0].metadata.name}')
-endef
+# ---------- Helm / Chart ----------
+HELM_RELEASE ?= grpc-echo
+HELM_CHART   ?= ./helm/grpc-echo
+# デフォルトは dev values（必要なら `make h-up HELM_VALUES=...` で差し替え）
+HELM_VALUES  ?= ./helm/grpc-echo/values.dev.yaml
 
-# base64 decode: linux/WSL uses -d, mac uses -D. try both.
-BASE64_DECODE = (base64 -d 2>/dev/null || base64 -D)
+# ---------- Images / Tags ----------
+GRPC_IMAGE_REPO ?= grpc-echo
+GW_IMAGE_REPO   ?= grpc-http-gateway
+
+# IMAGE_TAG を指定しない場合は:
+# 1) git の short sha が取れればそれ
+# 2) なければ日時
+IMAGE_TAG ?= $(shell (git rev-parse --short HEAD 2>/dev/null) || date +%Y%m%d%H%M%S)
+
+# ---------- Help ----------
+.PHONY: help
+help: ## Show help
+	@echo ""
+	@echo "Usage:"
+	@echo "  make <target> [VAR=value]"
+	@echo ""
+	@echo "Common vars:"
+	@echo "  IMAGE_TAG=$(IMAGE_TAG)"
+	@echo "  HELM_VALUES=$(HELM_VALUES)"
+	@echo "  K8S_NAMESPACE=$(K8S_NAMESPACE)"
+	@echo "  KIND_CLUSTER=$(KIND_CLUSTER)"
+	@echo ""
+	@echo "Targets:"
+	@grep -E '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | \
+	  awk 'BEGIN {FS = ":.*## "}; {printf "  %-24s %s\n", $$1, $$2}'
+	@echo ""
 
 # ---------- Protobuf / gRPC-Gateway ----------
 .PHONY: proto
-proto:
+proto: ## Generate protobuf (go / go-grpc / grpc-gateway)
 	@echo "==> Generating protobufs..."
 	@for dir in $(PROTO_DIRS); do \
 		echo " -> $$dir"; \
@@ -89,78 +93,84 @@ proto:
 	done
 
 # ---------- Run (Local) ----------
-.PHONY: run-server run-gateway
-run-server:
+.PHONY: run-server build-server run-gateway
+run-server: ## Run gRPC server locally
 	$(GO_RUN) ./cmd/server
 
-run-gateway:
+build-server: ## Build gRPC server binary
+	$(GO_BUILD) ./cmd/server
+
+run-gateway: ## Run HTTP gateway locally
 	$(GO_RUN) ./cmd/http_gateway
-
-# ---------- Build (Go) ----------
-.PHONY: build test fmt vet lint tree
-build:
-	$(GO) build ./...
-
-test:
-	$(GO) test ./...
-
-fmt:
-	@echo "==> gofmt all *.go"
-	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
-
-vet:
-	$(GO) vet ./...
-
-lint: fmt vet
-
-tree:
-	tree -L 3
 
 # ---------- Docker ----------
 .PHONY: docker-build docker-build-gw docker-run docker-run-gw docker-stop docker-stop-gw
-docker-build:
-	$(DOCKER) build -t $(GRPC_IMAGE) .
+docker-build: ## Build grpc-echo image (tag=IMAGE_TAG)
+	docker build -t $(GRPC_IMAGE_REPO):$(IMAGE_TAG) .
 
-docker-build-gw:
-	$(DOCKER) build -f Dockerfile.http_gateway -t $(GW_IMAGE) .
+docker-build-gw: ## Build http-gateway image (tag=IMAGE_TAG)
+	docker build -f Dockerfile.http_gateway -t $(GW_IMAGE_REPO):$(IMAGE_TAG) .
 
-docker-run:
-	$(DOCKER) run --rm -p $(GRPC_PORT):50051 --name grpc-echo $(GRPC_IMAGE)
+docker-run: ## Run grpc-echo container locally (tag=IMAGE_TAG)
+	docker run --rm \
+	  -p $(GRPC_PORT):50051 \
+	  --name grpc-echo \
+	  $(GRPC_IMAGE_REPO):$(IMAGE_TAG)
 
-docker-run-gw:
-	$(DOCKER) run --rm \
+docker-run-gw: ## Run http-gateway container locally (tag=IMAGE_TAG)
+	docker run --rm \
 	  -p $(HTTP_GATEWAY_PORT):8081 \
 	  -e GRPC_SERVER_ADDR=$(GRPC_ADDR) \
 	  -e HTTP_LISTEN_ADDR=:8081 \
 	  --name grpc-http-gateway \
-	  $(GW_IMAGE)
+	  $(GW_IMAGE_REPO):$(IMAGE_TAG)
 
-docker-stop:
-	- $(DOCKER) stop grpc-echo || true
+docker-stop: ## Stop grpc-echo container
+	- docker stop grpc-echo >/dev/null 2>&1 || true
 
-docker-stop-gw:
-	- $(DOCKER) stop grpc-http-gateway || true
+docker-stop-gw: ## Stop http-gateway container
+	- docker stop grpc-http-gateway >/dev/null 2>&1 || true
 
 # ---------- Docker Compose ----------
-.PHONY: compose-build compose-db compose-down compose-logs compose-ps
-compose-build:
+.PHONY: compose-up compose-db compose-down compose-logs compose-ps
+compose-up: ## docker-compose up --build
 	$(DOCKER_COMPOSE) up --build
 
-compose-db:
+compose-db: ## docker-compose up -d db
 	$(DOCKER_COMPOSE) up -d db
 
-compose-down:
+compose-down: ## docker-compose down
 	$(DOCKER_COMPOSE) down
 
-compose-logs:
+compose-logs: ## docker-compose logs -f
 	$(DOCKER_COMPOSE) logs -f
 
-compose-ps:
+compose-ps: ## docker-compose ps
 	$(DOCKER_COMPOSE) ps
 
-# ---------- Health / Tools ----------
+# ---------- Tools ----------
+.PHONY: fmt vet lint test build tree
+fmt: ## gofmt all *.go
+	@echo "==> gofmt all *.go"
+	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
+
+vet: ## go vet ./...
+	$(GO) vet ./...
+
+lint: fmt vet ## fmt + vet
+
+test: ## go test ./...
+	$(GO) test ./...
+
+build: ## go build ./...
+	$(GO) build ./...
+
+tree: ## tree -L 3
+	tree -L 3
+
+# ---------- Health / REPL ----------
 .PHONY: health evans
-health:
+health: ## gRPC health check (SERVICE=... optional)
 	@if [ -z "$(SERVICE)" ]; then \
 		echo "Checking overall health..."; \
 		$(GRPCURL) -plaintext -d '{}' $(GRPC_ADDR) grpc.health.v1.Health/Check; \
@@ -169,43 +179,70 @@ health:
 		$(GRPCURL) -plaintext -d '{"service":"$(SERVICE)"}' $(GRPC_ADDR) grpc.health.v1.Health/Check; \
 	fi
 
-evans:
+evans: ## evans repl to gRPC
 	evans --host $(GRPC_HOST) --port $(GRPC_PORT) -r repl
 
-# ---------- Helm (kind+helm main flow) ----------
-.PHONY: h-install h-up h-template h-status
-h-install:
-	$(HELM) install $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
+# ---------- JWT Helper ----------
+.PHONY: jwt jwt-print
+jwt-print: ## Print token only
+	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
 
-# upgrade --install (idempotent)
-h-up:
-	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
+jwt: ## Print 'export TOKEN=...' for eval
+	@cd cmd/jwt_gen && \
+	  token=$$(AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .); \
+	  echo "export TOKEN=$$token"
 
-h-template:
+# ---------- Helm ----------
+.PHONY: h-template h-lint h-install h-up h-status h-uninstall
+h-template: ## helm template (HELM_VALUES=...)
 	$(HELM) template $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
 
-h-status:
+h-lint: ## helm lint
+	$(HELM) lint $(HELM_CHART)
+
+h-install: ## helm install (first time)
+	$(HELM) install $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
+
+# ★ここが主役：values のキーに合わせて image tag を自動で付与
+h-up: ## helm upgrade (auto set grpcEcho/gateway image repo+tag by IMAGE_TAG)
+	$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES) \
+	  --set grpcEcho.image.repository=$(GRPC_IMAGE_REPO) \
+	  --set grpcEcho.image.tag=$(IMAGE_TAG) \
+	  --set gateway.image.repository=$(GW_IMAGE_REPO) \
+	  --set gateway.image.tag=$(IMAGE_TAG)
+
+h-status: ## helm status
 	$(HELM) status $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
-# ---------- kind helpers ----------
-.PHONY: k-load k-load-gw
-k-load:
-	$(KIND) load docker-image --name $(KIND_CLUSTER) $(GRPC_IMAGE)
+h-uninstall: ## helm uninstall
+	$(HELM) uninstall $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
-k-load-gw:
-	$(KIND) load docker-image --name $(KIND_CLUSTER) $(GW_IMAGE)
+# ---------- Kubernetes (kind) ----------
+.PHONY: k-status k-pods k-svc k-ing k-logs k-apply k-del-pods \
+        k-grpc k-gw k-metrics k-graf k-otel-logs k-mysql k-mysql-logs \
+        k-ingress k-ingress-logs k-ingress-pf
 
-# ---------- Kubernetes (observability / debugging) ----------
-.PHONY: k-pods k-status k-apply k-del-pods k-env
-k-pods:
-	$(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
-
-k-status:
+k-status: ## Show pods/services/ingress
 	@echo "== Pods =="; $(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
+	@echo ""
 	@echo "== Services =="; $(KUBECTL) get svc -n $(K8S_NAMESPACE)
+	@echo ""
 	@echo "== Ingress =="; $(KUBECTL) get ingress -n $(K8S_NAMESPACE) || true
 
-k-apply:
+k-pods: ## kubectl get pods -o wide
+	$(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
+
+k-svc: ## kubectl get svc
+	$(KUBECTL) get svc -n $(K8S_NAMESPACE)
+
+k-ing: ## kubectl get ingress
+	$(KUBECTL) get ingress -n $(K8S_NAMESPACE) || true
+
+k-logs: ## Tail logs (APP=grpc-echo|http-gateway|mysql|...)
+	@if [ -z "$(APP)" ]; then echo "Usage: make k-logs APP=grpc-echo"; exit 1; fi
+	$(KUBECTL) logs deploy/$(APP) -n $(K8S_NAMESPACE) -f
+
+k-apply: ## Apply manifests under k8s/ (or FILE=...)
 	@if [ -z "$(FILE)" ]; then \
 	  echo "Applying manifests under k8s/"; \
 	  $(KUBECTL) apply -n $(K8S_NAMESPACE) -f k8s/; \
@@ -214,114 +251,59 @@ k-apply:
 	  $(KUBECTL) apply -n $(K8S_NAMESPACE) -f $(FILE); \
 	fi
 
-k-del-pods:
+k-del-pods: ## Delete pods by label selector (SEL="app=mysql")
 	@if [ -z "$(SEL)" ]; then \
-	  echo "Usage: make k-del-pods SEL=\"app=mysql\""; exit 1; \
+	  echo 'Usage: make k-del-pods SEL="app=mysql"'; exit 1; \
 	fi
 	$(KUBECTL) delete pod -l $(SEL) -n $(K8S_NAMESPACE)
 
-k-env:
-	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml \
-	  | sed -n '/envFrom:/,/imagePullPolicy/p'
-
-# ---------- kubectl logs / wait ----------
-.PHONY: k-grpc-logs k-gw-logs k-otel-logs k-mysql-logs k-logs k-wait
-k-grpc-logs:
-	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f
-
-k-gw-logs:
-	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f
-
-k-otel-logs:
-	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
-
-k-mysql-logs:
-	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
-
-# follow both main apps (useful)
-k-logs:
-	@echo "== grpc-echo =="; \
-	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f & \
-	echo "== http-gateway =="; \
-	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f; \
-	wait
-
-k-wait:
-	$(KUBECTL) rollout status deploy/grpc-echo -n $(K8S_NAMESPACE) --timeout=120s
-	$(KUBECTL) rollout status deploy/http-gateway -n $(K8S_NAMESPACE) --timeout=120s
-
-# ---------- Port-forward (debug) ----------
-.PHONY: k-grpc k-gw k-metrics k-graf
-k-grpc:
+# Port-forward: direct services
+k-grpc: ## port-forward grpc-echo service (grpc)
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(GRPC_PORT):50051
 
-k-gw:
+k-gw: ## port-forward http-gateway service
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway $(HTTP_GATEWAY_PORT):8081
 
-k-metrics:
+k-metrics: ## port-forward metrics
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(METRICS_PORT):9464
 
-k-graf:
+k-graf: ## port-forward grafana (localhost:3000)
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grafana 3000:3000
 
-# ---------- Ingress (main dev entry for kind+helm) ----------
-.PHONY: k-ingress k-ingress-url
-k-ingress:
-	$(KUBECTL) port-forward -n $(INGRESS_NS) svc/$(INGRESS_SVC) $(INGRESS_LOCAL_PORT):80
+# Ingress NGINX helpers
+k-ingress: ## get ingress-nginx pods/svc
+	$(KUBECTL) get pods,svc -n ingress-nginx -o wide
 
-k-ingress-url:
-	@echo "$(INGRESS_URL)"
+k-ingress-logs: ## tail ingress-nginx controller logs
+	$(KUBECTL) logs -n ingress-nginx deploy/ingress-nginx-controller -f
 
-# ---------- DB (k8s) ----------
-.PHONY: k-mysql k-mysql-sh
-k-mysql:
-	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) $(call pod,app=mysql) -- mysql -uroot -proot grpcdb
+k-ingress-pf: ## port-forward ingress-nginx controller to localhost:8080
+	$(KUBECTL) port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
 
-k-mysql-sh:
-	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) $(call pod,app=mysql) -- bash
+# MySQL helpers
+k-mysql: ## login mysql inside k8s (root/root, grpcdb)
+	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) \
+	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
+	  -- mysql -uroot -proot grpcdb
 
-# ---------- Secret / ConfigMap ----------
-.PHONY: k-cm k-secret k-secret-decode
-k-cm:
-	$(KUBECTL) get configmap grpc-echo-config -n $(K8S_NAMESPACE) -o yaml
+k-mysql-logs: ## tail mysql logs
+	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
 
-k-secret:
-	$(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o yaml
+k-otel-logs: ## tail otel-collector logs
+	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
 
-k-secret-decode:
-	@echo "DB_USER: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_USER}' | $(BASE64_DECODE))"
-	@echo "DB_PASSWORD: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_PASSWORD}' | $(BASE64_DECODE))"
-	@echo "AUTH_SECRET: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.AUTH_SECRET}' | $(BASE64_DECODE))"
+# ---------- kind load / rebuild with guaranteed tag ----------
+.PHONY: k-load k-wait k-rebuild
 
-# ---------- One-shot workflows (kind+helm) ----------
-.PHONY: k-rebuild k-rebuild-grpc k-rebuild-gw
-# grpc + gateway build -> kind load -> helm upgrade -> wait
-k-rebuild:
-	$(MAKE) docker-build IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) docker-build-gw IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) k-load IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) k-load-gw IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) h-up
-	$(MAKE) k-wait
+k-load: ## kind load grpc-echo & http-gateway images (tag=IMAGE_TAG)
+	$(KIND) load docker-image --name $(KIND_CLUSTER) $(GRPC_IMAGE_REPO):$(IMAGE_TAG)
+	$(KIND) load docker-image --name $(KIND_CLUSTER) $(GW_IMAGE_REPO):$(IMAGE_TAG)
 
-k-rebuild-grpc:
-	$(MAKE) docker-build IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) k-load IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) h-up
-	$(MAKE) k-wait
+k-wait: ## Wait rollout for grpc-echo and http-gateway
+	$(KUBECTL) rollout status deploy/grpc-echo -n $(K8S_NAMESPACE)
+	$(KUBECTL) rollout status deploy/http-gateway -n $(K8S_NAMESPACE)
 
-k-rebuild-gw:
-	$(MAKE) docker-build-gw IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) k-load-gw IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) h-up
-	$(MAKE) k-wait
-
-# ---------- JWT Helper ----------
-.PHONY: jwt jwt-print
-jwt-print:
-	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
-
-jwt:
-	@cd cmd/jwt_gen && \
-	  token=$$(AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .); \
-	  echo "export TOKEN=$$token"
+# ★これが “確実にそのタグで動く” まで面倒を見るワンショット
+k-rebuild: docker-build docker-build-gw k-load h-up k-wait k-status ## Build->kind load->helm upgrade->wait->status
+	@echo ""
+	@echo "✅ Rebuilt and deployed with IMAGE_TAG=$(IMAGE_TAG)"
