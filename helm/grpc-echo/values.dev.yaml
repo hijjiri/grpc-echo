@@ -15,19 +15,13 @@ grpcEcho:
   replicaCount: 2
   image:
     repository: "grpc-echo"
-    # dev を強制したいなら明示してもOK（未指定でも global.imageTag=dev が効く）
-    tag: ""
     pullPolicy: "IfNotPresent"
 
 gateway:
   enabled: true
   image:
     repository: "grpc-http-gateway"
-    tag: ""
     pullPolicy: "IfNotPresent"
-  service:
-    type: "ClusterIP"
-    port: 8081
 
 ingress:
   enabled: true

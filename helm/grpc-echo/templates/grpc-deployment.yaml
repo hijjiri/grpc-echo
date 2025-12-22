@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
         - name: grpc-echo
-          image: "{{ .Values.grpcEcho.image.repository }}:{{ $tag }}"
-          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy | default "IfNotPresent" }}
+          image: "{{ .Values.grpcEcho.image.repository }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy }}
           ports:
             - containerPort: 50051
             - containerPort: 9464

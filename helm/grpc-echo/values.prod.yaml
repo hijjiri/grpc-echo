@@ -15,18 +15,13 @@ grpcEcho:
   replicaCount: 2
   image:
     repository: "grpc-echo"
-    tag: ""
-    pullPolicy: "Always"
+    pullPolicy: "IfNotPresent"
 
 gateway:
   enabled: true
   image:
     repository: "grpc-http-gateway"
-    tag: ""
-    pullPolicy: "Always"
-  service:
-    type: "ClusterIP"
-    port: 8081
+    pullPolicy: "IfNotPresent"
 
 ingress:
   enabled: true

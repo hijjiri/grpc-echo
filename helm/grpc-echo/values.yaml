@@ -3,21 +3,26 @@ global:
 
 config:
   authSecret: "my-dev-secret-key"
+
   db:
     host: "mysql"
     port: 3306
     name: "grpcdb"
     user: "root"
     password: "root"
+
   otelExporterEndpoint: "otel-collector:4317"
 
+# ---- grpc-echo (gRPC server) ----
 grpcEcho:
   replicaCount: 2
   image:
     repository: "grpc-echo"
-    # tag を明示したい場合はここ（未指定なら global.imageTag）
-    tag: ""
     pullPolicy: "IfNotPresent"
+  service:
+    type: "ClusterIP"
+    grpcPort: 50051
+    metricsPort: 9464
   resources:
     requests:
       cpu: "100m"
@@ -25,23 +30,25 @@ grpcEcho:
     limits:
       cpu: "500m"
       memory: "256Mi"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 2
+      periodSeconds: 5
 
-service:
-  grpc:
-    type: "ClusterIP"
-    port: 50051
-  metrics:
-    port: 9464
-
+# ---- http-gateway ----
 gateway:
   enabled: true
+  replicaCount: 1
   image:
     repository: "grpc-http-gateway"
-    tag: ""
     pullPolicy: "IfNotPresent"
   service:
     type: "ClusterIP"
     port: 8081
+    targetPort: 8081
   resources:
     requests:
       cpu: "50m"
@@ -49,6 +56,13 @@ gateway:
     limits:
       cpu: "200m"
       memory: "128Mi"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 5
 
 ingress:
   enabled: true

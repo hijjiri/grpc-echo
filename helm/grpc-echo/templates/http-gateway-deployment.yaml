@@ -21,8 +21,8 @@ spec:
     spec:
       containers:
         - name: http-gateway
-          image: "{{ .Values.gateway.image.repository }}:{{ $tag }}"
-          imagePullPolicy: {{ .Values.gateway.image.pullPolicy | default "IfNotPresent" }}
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
           ports:
             - containerPort: 8081
           env:
