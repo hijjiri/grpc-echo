@@ -3,14 +3,17 @@ GO          ?= go
 GO_RUN      ?= $(GO) run
 GO_BUILD    ?= $(GO) build
 GRPCURL     ?= grpcurl
+DOCKER      ?= docker
 DOCKER_COMPOSE ?= docker-compose
+KUBECTL     ?= kubectl
+HELM        ?= helm
+KIND        ?= kind
 
-# gRPC / HTTP / Metrics のローカルアクセス用アドレス
+# ---------- Addresses (Local access) ----------
 GRPC_ADDR          ?= localhost:50051
 HTTP_GATEWAY_ADDR  ?= localhost:8081
 METRICS_ADDR       ?= localhost:9464
 
-# アドレスから host / port を分解（grpcurl 用などに便利）
 GRPC_HOST          := $(word 1,$(subst :, ,$(GRPC_ADDR)))
 GRPC_PORT          := $(word 2,$(subst :, ,$(GRPC_ADDR)))
 
@@ -22,19 +25,45 @@ METRICS_PORT       := $(word 2,$(subst :, ,$(METRICS_ADDR)))
 
 SERVICE   ?=
 
-# Kubernetes / kind
-KUBECTL       ?= kubectl
+# ---------- Kubernetes / kind ----------
 K8S_NAMESPACE ?= default
-KIND_CLUSTER  ?= grpc-echo   # kind クラスタ名
+KIND_CLUSTER  ?= grpc-echo
 
-# JWT
+# Ingress (kind + ingress-nginx)
+INGRESS_NS          ?= ingress-nginx
+INGRESS_SVC         ?= ingress-nginx-controller
+INGRESS_LOCAL_PORT  ?= 8080
+INGRESS_HOST        ?= grpc-echo.local
+INGRESS_URL         ?= http://$(INGRESS_HOST):$(INGRESS_LOCAL_PORT)
+
+# ---------- Helm ----------
+HELM_RELEASE ?= grpc-echo
+HELM_CHART   ?= ./helm/grpc-echo
+# default values (dev)
+HELM_VALUES  ?= $(HELM_CHART)/values.dev.yaml
+
+# ---------- Images ----------
+# tag is the main "switch" to avoid latest-hell.
+IMAGE_TAG ?= dev
+
+GRPC_IMAGE ?= grpc-echo:$(IMAGE_TAG)
+GW_IMAGE   ?= grpc-http-gateway:$(IMAGE_TAG)
+
+# ---------- JWT ----------
 JWT_SECRET ?= my-dev-secret-key
 
-# プロトファイルディレクトリ自動検出
+# ---------- Protobuf ----------
 PROTO_DIRS := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
-
-# gRPC-Gateway 用に対象 proto 一覧を自動検出
 GATEWAY_PROTOS := $(shell find api -name '*.proto' -print)
+
+# ---------- Helpers ----------
+# Usage: $(call pod,app=mysql)
+define pod
+$(shell $(KUBECTL) get pod -n $(K8S_NAMESPACE) -l $(1) -o jsonpath='{.items[0].metadata.name}')
+endef
+
+# base64 decode: linux/WSL uses -d, mac uses -D. try both.
+BASE64_DECODE = (base64 -d 2>/dev/null || base64 -D)
 
 # ---------- Protobuf / gRPC-Gateway ----------
 .PHONY: proto
@@ -49,7 +78,6 @@ proto:
 		  --go-grpc_out=paths=source_relative:. \
 		  $$dir/*.proto; \
 	done
-
 	@echo "==> Generating gRPC-Gateway..."
 	@for file in $(GATEWAY_PROTOS); do \
 		echo " -> $$file"; \
@@ -61,48 +89,57 @@ proto:
 	done
 
 # ---------- Run (Local) ----------
-.PHONY: run-server
+.PHONY: run-server run-gateway
 run-server:
 	$(GO_RUN) ./cmd/server
 
-.PHONY: build-server
-build-server:
-	$(GO_BUILD) ./cmd/server
+run-gateway:
+	$(GO_RUN) ./cmd/http_gateway
+
+# ---------- Build (Go) ----------
+.PHONY: build test fmt vet lint tree
+build:
+	$(GO) build ./...
+
+test:
+	$(GO) test ./...
+
+fmt:
+	@echo "==> gofmt all *.go"
+	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
+
+vet:
+	$(GO) vet ./...
+
+lint: fmt vet
+
+tree:
+	tree -L 3
 
 # ---------- Docker ----------
-.PHONY: docker-build docker-run docker-stop \
-        docker-build-gw docker-run-gw docker-stop-gw
-
+.PHONY: docker-build docker-build-gw docker-run docker-run-gw docker-stop docker-stop-gw
 docker-build:
-	docker build -t grpc-echo:latest .
+	$(DOCKER) build -t $(GRPC_IMAGE) .
 
-# ホスト側ポートは GRPC_ADDR から取得、コンテナ内は 50051 で固定
-docker-run:
-	docker run --rm \
-	  -p $(GRPC_PORT):50051 \
-	  --name grpc-echo \
-	  grpc-echo
-
-docker-stop:
-	- docker stop grpc-echo || true
-
-# HTTP Gateway イメージをビルド
 docker-build-gw:
-	docker build -f Dockerfile.http_gateway -t grpc-http-gateway:latest .
+	$(DOCKER) build -f Dockerfile.http_gateway -t $(GW_IMAGE) .
 
-# ローカルで HTTP Gateway を起動
-# - ホスト側のポートは HTTP_GATEWAY_PORT（デフォルト 8081）
-# - gRPC バックエンドは GRPC_ADDR（デフォルト localhost:50051）
+docker-run:
+	$(DOCKER) run --rm -p $(GRPC_PORT):50051 --name grpc-echo $(GRPC_IMAGE)
+
 docker-run-gw:
-	docker run --rm \
+	$(DOCKER) run --rm \
 	  -p $(HTTP_GATEWAY_PORT):8081 \
 	  -e GRPC_SERVER_ADDR=$(GRPC_ADDR) \
 	  -e HTTP_LISTEN_ADDR=:8081 \
 	  --name grpc-http-gateway \
-	  grpc-http-gateway:latest
+	  $(GW_IMAGE)
+
+docker-stop:
+	- $(DOCKER) stop grpc-echo || true
 
 docker-stop-gw:
-	- docker stop grpc-http-gateway || true
+	- $(DOCKER) stop grpc-http-gateway || true
 
 # ---------- Docker Compose ----------
 .PHONY: compose-build compose-db compose-down compose-logs compose-ps
@@ -121,34 +158,7 @@ compose-logs:
 compose-ps:
 	$(DOCKER_COMPOSE) ps
 
-# ---------- Tools ----------
-.PHONY: fmt vet lint tree
-fmt:
-	@echo "==> gofmt all *.go"
-	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
-
-vet:
-	$(GO) vet ./...
-
-lint: fmt vet
-
-tree:
-	tree -L 3
-
-# ---------- Testing ----------
-.PHONY: test build
-test:
-	$(GO) test ./...
-
-build:
-	$(GO) build ./...
-
-# ---------- DB Utility (docker-compose 用) ----------
-.PHONY: db
-db:
-	$(DOCKER_COMPOSE) exec db mysql -uapp -papp grpcdb
-
-# ---------- Health ----------
+# ---------- Health / Tools ----------
 .PHONY: health evans
 health:
 	@if [ -z "$(SERVICE)" ]; then \
@@ -162,91 +172,39 @@ health:
 evans:
 	evans --host $(GRPC_HOST) --port $(GRPC_PORT) -r repl
 
-# ---------- HTTP Gateway (ローカル用) ----------
-.PHONY: run-gateway
-run-gateway:
-	$(GO_RUN) ./cmd/http_gateway
+# ---------- Helm (kind+helm main flow) ----------
+.PHONY: h-install h-up h-template h-status
+h-install:
+	$(HELM) install $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
 
-# ---------- Kubernetes Utility ----------
-.PHONY: k-build k-gw-build k-pods k-grpc k-grpc-logs \
-        k-gw k-gw-logs \
-        k-graf k-graf-logs \
-        k-mysql-logs k-otel-logs k-mysql k-mysql-sh \
-        k-apply k-del-pods k-metrics k-env \
-        k-cm k-secret k-secret-decode
+# upgrade --install (idempotent)
+h-up:
+	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
 
-# gRPC サーバ用イメージをビルド → kind にロード → Deployment 再起動
-k-build:
-	docker build -t grpc-echo:latest .
-	kind load docker-image --name $(KIND_CLUSTER) grpc-echo:latest
-	$(KUBECTL) rollout restart deployment grpc-echo -n $(K8S_NAMESPACE)
-	$(KUBECTL) get pods -l app=grpc-echo -n $(K8S_NAMESPACE)
+h-template:
+	$(HELM) template $(HELM_RELEASE) $(HELM_CHART) -n $(K8S_NAMESPACE) -f $(HELM_VALUES)
 
-# HTTP Gateway 用イメージをビルド → kind にロード → Deployment 再起動
-k-gw-build:
-	docker build -f Dockerfile.http_gateway -t grpc-http-gateway:latest .
-	kind load docker-image --name $(KIND_CLUSTER) grpc-http-gateway:latest
-	$(KUBECTL) rollout restart deployment http-gateway -n $(K8S_NAMESPACE)
-	$(KUBECTL) get pods -l app=http-gateway -n $(K8S_NAMESPACE)
+h-status:
+	$(HELM) status $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
-# Pod 一覧確認
+# ---------- kind helpers ----------
+.PHONY: k-load k-load-gw
+k-load:
+	$(KIND) load docker-image --name $(KIND_CLUSTER) $(GRPC_IMAGE)
+
+k-load-gw:
+	$(KIND) load docker-image --name $(KIND_CLUSTER) $(GW_IMAGE)
+
+# ---------- Kubernetes (observability / debugging) ----------
+.PHONY: k-pods k-status k-apply k-del-pods k-env
 k-pods:
 	$(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
 
-# gRPC サービスを localhost:GRPC_PORT にポートフォワード
-# （Service 側は常に 50051）
-k-grpc:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(GRPC_PORT):50051
+k-status:
+	@echo "== Pods =="; $(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
+	@echo "== Services =="; $(KUBECTL) get svc -n $(K8S_NAMESPACE)
+	@echo "== Ingress =="; $(KUBECTL) get ingress -n $(K8S_NAMESPACE) || true
 
-# gRPC サービス(grpc-echo)のログ監視
-k-grpc-logs:
-	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f
-
-# HTTP Gateway を localhost:HTTP_GATEWAY_PORT にポートフォワード
-# （Service 側は常に 8081）
-k-gw:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway $(HTTP_GATEWAY_PORT):8081
-
-# HTTP Gateway のログ監視
-k-gw-logs:
-	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f
-
-# Grafana を localhost:3000 にポートフォワード
-k-graf:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grafana 3000:3000
-
-# Grafana のログ監視
-k-graf-logs:
-	$(KUBECTL) logs deploy/grafana -n $(K8S_NAMESPACE) -f
-
-# OpenTelemetry Collector のログ監視 (follow)
-k-otel-logs:
-	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
-
-# メトリクス用ポートフォワード（ホスト側は METRICS_PORT）
-# Service 側は常に 9464
-k-metrics:
-	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(METRICS_PORT):9464
-
-# MySQL に直接ログイン（root/root, grpcdb）
-k-mysql:
-	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) \
-	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
-	  -- mysql -uroot -proot grpcdb
-
-# MySQL のログ監視
-k-mysql-logs:
-	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
-
-# MySQL Pod のシェルに入る
-k-mysql-sh:
-	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) \
-	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
-	  -- bash
-
-# k8s マニフェスト適用
-#   make k-apply                -> k8s/ ディレクトリ配下を一括 apply
-#   make k-apply FILE=k8s/mysql.yaml
 k-apply:
 	@if [ -z "$(FILE)" ]; then \
 	  echo "Applying manifests under k8s/"; \
@@ -256,41 +214,113 @@ k-apply:
 	  $(KUBECTL) apply -n $(K8S_NAMESPACE) -f $(FILE); \
 	fi
 
-# 任意のラベルセレクタで Pod を削除して再作成させる
-#   make k-del-pods SEL="app=mysql"
 k-del-pods:
 	@if [ -z "$(SEL)" ]; then \
 	  echo "Usage: make k-del-pods SEL=\"app=mysql\""; exit 1; \
 	fi
 	$(KUBECTL) delete pod -l $(SEL) -n $(K8S_NAMESPACE)
 
-# grpc-echo 用 ConfigMap を確認
-k-cm:
-	$(KUBECTL) get configmap grpc-echo-config -n $(K8S_NAMESPACE) -o yaml
-
-# grpc-echo 用 Secret を確認（値は base64 エンコード）
-k-secret:
-	$(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o yaml
-
-# Secret の中身を開発用に decode して確認（※機微情報に注意）
-k-secret-decode:
-	@echo "DB_USER: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_USER}' | base64 -d)"
-	@echo "DB_PASSWORD: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)"
-	@echo "AUTH_SECRET: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.AUTH_SECRET}' | base64 -d)"
-
-# grpc-echo Deployment の envFrom セクションをざっくり確認
 k-env:
 	$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o yaml \
 	  | sed -n '/envFrom:/,/imagePullPolicy/p'
 
+# ---------- kubectl logs / wait ----------
+.PHONY: k-grpc-logs k-gw-logs k-otel-logs k-mysql-logs k-logs k-wait
+k-grpc-logs:
+	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f
+
+k-gw-logs:
+	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f
+
+k-otel-logs:
+	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
+
+k-mysql-logs:
+	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
+
+# follow both main apps (useful)
+k-logs:
+	@echo "== grpc-echo =="; \
+	$(KUBECTL) logs deploy/grpc-echo -n $(K8S_NAMESPACE) -f & \
+	echo "== http-gateway =="; \
+	$(KUBECTL) logs deploy/http-gateway -n $(K8S_NAMESPACE) -f; \
+	wait
+
+k-wait:
+	$(KUBECTL) rollout status deploy/grpc-echo -n $(K8S_NAMESPACE) --timeout=120s
+	$(KUBECTL) rollout status deploy/http-gateway -n $(K8S_NAMESPACE) --timeout=120s
+
+# ---------- Port-forward (debug) ----------
+.PHONY: k-grpc k-gw k-metrics k-graf
+k-grpc:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(GRPC_PORT):50051
+
+k-gw:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway $(HTTP_GATEWAY_PORT):8081
+
+k-metrics:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(METRICS_PORT):9464
+
+k-graf:
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grafana 3000:3000
+
+# ---------- Ingress (main dev entry for kind+helm) ----------
+.PHONY: k-ingress k-ingress-url
+k-ingress:
+	$(KUBECTL) port-forward -n $(INGRESS_NS) svc/$(INGRESS_SVC) $(INGRESS_LOCAL_PORT):80
+
+k-ingress-url:
+	@echo "$(INGRESS_URL)"
+
+# ---------- DB (k8s) ----------
+.PHONY: k-mysql k-mysql-sh
+k-mysql:
+	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) $(call pod,app=mysql) -- mysql -uroot -proot grpcdb
+
+k-mysql-sh:
+	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) $(call pod,app=mysql) -- bash
+
+# ---------- Secret / ConfigMap ----------
+.PHONY: k-cm k-secret k-secret-decode
+k-cm:
+	$(KUBECTL) get configmap grpc-echo-config -n $(K8S_NAMESPACE) -o yaml
+
+k-secret:
+	$(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o yaml
+
+k-secret-decode:
+	@echo "DB_USER: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_USER}' | $(BASE64_DECODE))"
+	@echo "DB_PASSWORD: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.DB_PASSWORD}' | $(BASE64_DECODE))"
+	@echo "AUTH_SECRET: $$($(KUBECTL) get secret grpc-echo-secret -n $(K8S_NAMESPACE) -o jsonpath='{.data.AUTH_SECRET}' | $(BASE64_DECODE))"
+
+# ---------- One-shot workflows (kind+helm) ----------
+.PHONY: k-rebuild k-rebuild-grpc k-rebuild-gw
+# grpc + gateway build -> kind load -> helm upgrade -> wait
+k-rebuild:
+	$(MAKE) docker-build IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) docker-build-gw IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) k-load IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) k-load-gw IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) h-up
+	$(MAKE) k-wait
+
+k-rebuild-grpc:
+	$(MAKE) docker-build IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) k-load IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) h-up
+	$(MAKE) k-wait
+
+k-rebuild-gw:
+	$(MAKE) docker-build-gw IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) k-load-gw IMAGE_TAG=$(IMAGE_TAG)
+	$(MAKE) h-up
+	$(MAKE) k-wait
+
 # ---------- JWT Helper ----------
 .PHONY: jwt jwt-print
-
-# 素のトークンだけを表示したいとき（今までと同じ挙動）
 jwt-print:
 	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
 
-# シェルで eval して TOKEN に一発で入れたい用
 jwt:
 	@cd cmd/jwt_gen && \
 	  token=$$(AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .); \
