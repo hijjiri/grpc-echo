@@ -1,7 +1,12 @@
-{{- if .Values.gateway.enabled }}
+{{- $gw := .Values.gateway | default dict -}}
+{{- if (default false $gw.enabled) -}}
 
-{{- $globalTag := default "latest" .Values.global.imageTag }}
-{{- $tag := default $globalTag .Values.gateway.image.tag }}
+{{- $globalTag := default "latest" .Values.global.imageTag -}}
+{{- $svcTag := "" -}}
+{{- if and (hasKey $gw "image") (hasKey $gw.image "tag") -}}
+{{- $svcTag = $gw.image.tag -}}
+{{- end -}}
+{{- $tag := default $globalTag $svcTag -}}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -10,7 +15,7 @@ metadata:
   labels:
     app: http-gateway
 spec:
-  replicas: 1
+  replicas: {{ $gw.replicaCount | default 1 }}
   selector:
     matchLabels:
       app: http-gateway
@@ -21,8 +26,8 @@ spec:
     spec:
       containers:
         - name: http-gateway
-          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag }}"
-          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          image: "{{ $gw.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $gw.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - containerPort: 8081
           env:
@@ -44,7 +49,9 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 5
 
+          {{- with $gw.resources }}
           resources:
-{{ toYaml .Values.gateway.resources | nindent 12 }}
+{{ toYaml . | nindent 12 }}
+          {{- end }}
 
 {{- end }}

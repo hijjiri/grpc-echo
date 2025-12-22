@@ -1,5 +1,9 @@
-{{- $globalTag := default "latest" .Values.global.imageTag }}
-{{- $tag := default $globalTag .Values.grpcEcho.image.tag }}
+{{- $globalTag := default "latest" .Values.global.imageTag -}}
+{{- $svcTag := "" -}}
+{{- if and (hasKey .Values "grpcEcho") (hasKey .Values.grpcEcho "image") (hasKey .Values.grpcEcho.image "tag") -}}
+{{- $svcTag = .Values.grpcEcho.image.tag -}}
+{{- end -}}
+{{- $tag := default $globalTag $svcTag -}}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -17,8 +21,8 @@ spec:
     spec:
       containers:
         - name: grpc-echo
-          image: "{{ .Values.grpcEcho.image.repository }}:{{ .Values.global.imageTag }}"
-          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy }}
+          image: "{{ .Values.grpcEcho.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.grpcEcho.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - containerPort: 50051
             - containerPort: 9464
@@ -39,5 +43,7 @@ spec:
             initialDelaySeconds: 2
             periodSeconds: 5
 
+          {{- with .Values.grpcEcho.resources }}
           resources:
-{{ toYaml .Values.grpcEcho.resources | nindent 12 }}
+{{ toYaml . | nindent 12 }}
+          {{- end }}
