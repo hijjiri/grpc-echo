@@ -307,3 +307,59 @@ k-wait: ## Wait rollout for grpc-echo and http-gateway
 k-rebuild: docker-build docker-build-gw k-load h-up k-wait k-status ## Build->kind load->helm upgrade->wait->status
 	@echo ""
 	@echo "✅ Rebuilt and deployed with IMAGE_TAG=$(IMAGE_TAG)"
+
+# ---------- Productivity (smoke / cleanup / helm inspect) ----------
+.PHONY: smoke smoke-login smoke-todos k-clean h-values h-manifest
+
+# Ingress 経由で /auth/login → accessToken 抽出（jq があれば jq、なければ sed）
+smoke-login: ## Smoke: login via ingress and print token (requires k-ingress-pf running)
+	@echo "==> POST http://grpc-echo.local:8080/auth/login"
+	@resp=$$(curl -sS http://grpc-echo.local:8080/auth/login \
+	  -H "Content-Type: application/json" \
+	  -d '{"username":"user-123","password":"password"}'); \
+	echo "$$resp"; \
+	if command -v jq >/dev/null 2>&1; then \
+	  echo "$$resp" | jq -r '.accessToken'; \
+	else \
+	  echo "$$resp" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'; \
+	fi
+
+# Ingress 経由で /v1/todos を叩く（TOKEN が無ければ smoke-login 相当で取得して叩く）
+smoke-todos: ## Smoke: list todos via ingress (auto token)
+	@echo "==> GET http://grpc-echo.local:8080/v1/todos"
+	@token="$${TOKEN:-}"; \
+	if [ -z "$$token" ]; then \
+	  resp=$$(curl -sS http://grpc-echo.local:8080/auth/login \
+	    -H "Content-Type: application/json" \
+	    -d '{"username":"user-123","password":"password"}'); \
+	  if command -v jq >/dev/null 2>&1; then \
+	    token=$$(echo "$$resp" | jq -r '.accessToken'); \
+	  else \
+	    token=$$(echo "$$resp" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'); \
+	  fi; \
+	fi; \
+	curl -sS http://grpc-echo.local:8080/v1/todos \
+	  -H "Authorization: Bearer $$token" | (command -v jq >/dev/null 2>&1 && jq . || cat); \
+	echo ""
+
+# Ingress port-forward が別ターミナルで動いている想定で、login→todos をまとめて検証
+smoke: smoke-todos ## Smoke: login + list todos via ingress (requires k-ingress-pf running)
+
+# ImagePullBackOff / ErrImagePull / CrashLoopBackOff をまとめて削除して再作成させる
+# 使い方: make k-clean
+k-clean: ## Delete unhealthy pods (ImagePullBackOff/ErrImagePull/CrashLoopBackOff) in namespace
+	@echo "==> Deleting unhealthy pods in ns=$(K8S_NAMESPACE)"
+	@pods=$$($(KUBECTL) get pods -n $(K8S_NAMESPACE) --no-headers 2>/dev/null | \
+	  awk '$$3=="ImagePullBackOff" || $$3=="ErrImagePull" || $$3=="CrashLoopBackOff" {print $$1}'); \
+	if [ -z "$$pods" ]; then \
+	  echo "No unhealthy pods found."; \
+	else \
+	  echo "$$pods" | xargs -r $(KUBECTL) delete pod -n $(K8S_NAMESPACE); \
+	fi
+
+# Helm の values / manifest を確認（デバッグ用）
+h-values: ## Helm: show applied values (all)
+	$(HELM) get values $(HELM_RELEASE) -n $(K8S_NAMESPACE) -a
+
+h-manifest: ## Helm: show rendered manifest
+	$(HELM) get manifest $(HELM_RELEASE) -n $(K8S_NAMESPACE)
