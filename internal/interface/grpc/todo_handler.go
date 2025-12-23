@@ -1,4 +1,3 @@
-// internal/interface/grpc/todo_handler.go
 package grpcadapter
 
 import (
