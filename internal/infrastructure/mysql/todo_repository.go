@@ -76,32 +76,50 @@ func (r *TodoRepository) Create(ctx context.Context, t *domain_todo.Todo) (*doma
 func (r *TodoRepository) List(ctx context.Context) ([]*domain_todo.Todo, error) {
 	exec := r.getExecutor(ctx)
 
-	rows, err := exec.QueryContext(ctx,
-		`SELECT id, title, done FROM todos ORDER BY id`,
-	)
-	if err != nil {
-		r.logger.Error("failed to query todos", zap.Error(err))
-		return nil, fmt.Errorf("query todos: %w", err)
-	}
-	defer rows.Close()
-
 	var todos []*domain_todo.Todo
-	for rows.Next() {
-		var (
-			t       domain_todo.Todo
-			doneInt int
-		)
-		if err := rows.Scan(&t.ID, &t.Title, &doneInt); err != nil {
-			r.logger.Error("failed to scan todo", zap.Error(err))
-			return nil, fmt.Errorf("scan todo: %w", err)
-		}
-		t.Done = doneInt == 1
-		todos = append(todos, &t)
-	}
 
-	if err := rows.Err(); err != nil {
-		r.logger.Error("rows error", zap.Error(err))
-		return nil, fmt.Errorf("rows error: %w", err)
+	err := doWithRetry(ctx, DefaultReadRetry, func() error {
+		rows, err := exec.QueryContext(ctx,
+			`SELECT id, title, done FROM todos ORDER BY id`,
+		)
+		if err != nil {
+			// ここで返した err に対して retry 判定が走る
+			r.logger.Warn("failed to query todos (will retry if retryable)",
+				zap.Error(err),
+			)
+			return err
+		}
+		defer rows.Close()
+
+		// retry ループの都合上、ここで毎回作り直す
+		todos = todos[:0]
+
+		for rows.Next() {
+			var (
+				t       domain_todo.Todo
+				doneInt int
+			)
+			if err := rows.Scan(&t.ID, &t.Title, &doneInt); err != nil {
+				r.logger.Error("failed to scan todo", zap.Error(err))
+				return fmt.Errorf("scan todo: %w", err)
+			}
+			t.Done = doneInt == 1
+			todos = append(todos, &t)
+		}
+
+		if err := rows.Err(); err != nil {
+			r.logger.Error("rows error", zap.Error(err))
+			return fmt.Errorf("rows error: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		// doWithRetry が最終的に返したエラーをそのまま包む
+		r.logger.Error("failed to list todos",
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("query todos: %w", err)
 	}
 
 	r.logger.Info("todos listed",

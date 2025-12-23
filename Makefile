@@ -190,7 +190,7 @@ fmt: ## gofmt all *.go
 	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
 
 vet: ## go vet ./...
-	$(GO) vet ./...
+	$(GO) vet ./...j
 
 lint: fmt vet ## fmt + vet
 

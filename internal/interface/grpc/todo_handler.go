@@ -1,8 +1,10 @@
+// internal/interface/grpc/todo_handler.go
 package grpcadapter
 
 import (
 	"context"
 	"errors"
+	"time"
 
 	todov1 "github.com/hijjiri/grpc-echo/api/todo/v1"
 	domain_todo "github.com/hijjiri/grpc-echo/internal/domain/todo"
@@ -20,8 +22,18 @@ func NewTodoHandler(uc todo_usecase.Usecase) *TodoHandler {
 	return &TodoHandler{uc: uc}
 }
 
+// 本番目線：handler 層で「処理上限」を決めて、DB詰まり等で無限にぶら下がらないようにする
+const (
+	defaultTodoWriteTimeout  = 3 * time.Second  // Create/Update/Delete
+	defaultTodoReadTimeout   = 5 * time.Second  // List
+	defaultTodoStreamTimeout = 10 * time.Second // Stream List の「取得」側
+)
+
 // --- Create ---
 func (h *TodoHandler) CreateTodo(ctx context.Context, req *todov1.CreateTodoRequest) (*todov1.Todo, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTodoWriteTimeout)
+	defer cancel()
+
 	t, err := h.uc.Create(ctx, req.GetTitle())
 	if err != nil {
 		return nil, toGRPCError(err)
@@ -31,6 +43,9 @@ func (h *TodoHandler) CreateTodo(ctx context.Context, req *todov1.CreateTodoRequ
 
 // --- List ---
 func (h *TodoHandler) ListTodos(ctx context.Context, req *todov1.ListTodosRequest) (*todov1.ListTodosResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTodoReadTimeout)
+	defer cancel()
+
 	if userID, ok := UserIDFromContext(ctx); ok {
 		// ここで userID に応じたフィルタや認可を付けることもできる
 		_ = userID
@@ -50,6 +65,9 @@ func (h *TodoHandler) ListTodos(ctx context.Context, req *todov1.ListTodosReques
 
 // --- Delete ---
 func (h *TodoHandler) DeleteTodo(ctx context.Context, req *todov1.DeleteTodoRequest) (*todov1.DeleteTodoResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTodoWriteTimeout)
+	defer cancel()
+
 	if err := h.uc.Delete(ctx, req.GetId()); err != nil {
 		return nil, toGRPCError(err)
 	}
@@ -58,6 +76,9 @@ func (h *TodoHandler) DeleteTodo(ctx context.Context, req *todov1.DeleteTodoRequ
 }
 
 func (h *TodoHandler) UpdateTodo(ctx context.Context, req *todov1.UpdateTodoRequest) (*todov1.Todo, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTodoWriteTimeout)
+	defer cancel()
+
 	t, err := h.uc.Update(ctx, req.GetId(), req.GetTitle(), req.GetDone())
 	if err != nil {
 		return nil, toGRPCError(err)
@@ -76,6 +97,14 @@ func toProtoTodo(t *domain_todo.Todo) *todov1.Todo {
 
 // --- error mapper ---
 func toGRPCError(err error) error {
+	// context 系（timeout/cancel）は Internal にしない（本番目線で重要）
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, "request timeout")
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, "request canceled")
+	}
+
 	switch {
 	case errors.Is(err, todo_usecase.ErrEmptyTitle):
 		return status.Error(codes.InvalidArgument, "title is required")
@@ -98,27 +127,34 @@ func (h *TodoHandler) ListTodosStream(
 	req *todov1.ListTodosRequest,
 	stream todov1.TodoService_ListTodosStreamServer,
 ) error {
-	ctx := stream.Context()
+	// stream の ctx はクライアント切断を反映するので基本はこれを使う
+	baseCtx := stream.Context()
 
-	// 既存の ListTodos と同じ usecase を利用
-	todos, err := h.uc.List(ctx)
+	// 「取得」部分だけは timeout を付与して、DB詰まりで無限に待たないようにする
+	listCtx, cancel := context.WithTimeout(baseCtx, defaultTodoStreamTimeout)
+	defer cancel()
+
+	todos, err := h.uc.List(listCtx)
 	if err != nil {
-		// 既にあるロガーを使っている場合は、そちらに合わせてください
-		// h.logger.Error("failed to list todos (stream)", zap.Error(err))
-		return err
+		return toGRPCError(err)
 	}
 
 	for _, t := range todos {
+		// 送信前に ctx を尊重（クライアント切断を早く検知）
+		select {
+		case <-baseCtx.Done():
+			return toGRPCError(baseCtx.Err())
+		default:
+		}
+
 		resp := &todov1.Todo{
 			Id:    t.ID,
 			Title: t.Title,
 			Done:  t.Done,
-			// created_at / updated_at を proto に出しているならここでセット
 		}
 
 		if err := stream.Send(resp); err != nil {
-			// クライアント側が切断した場合など
-			// h.logger.Warn("failed to send todo (stream)", zap.Error(err))
+			// transport error（切断等）
 			return err
 		}
 	}
