@@ -31,8 +31,6 @@ import (
 // 共通: getenv ヘルパ
 //----------------------
 
-// もともと main.go にあったものと同じ動きになるようにしています。
-// （空文字なら def を使う）
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -40,11 +38,22 @@ func getenv(key, def string) string {
 	return def
 }
 
+func getenvDuration(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return d
+}
+
 //----------------------
 // Config struct
 //----------------------
 
-// DB 関係の設定
 type DBConfig struct {
 	Host     string
 	Port     string
@@ -53,17 +62,17 @@ type DBConfig struct {
 	Name     string
 }
 
-// サーバ全体の設定
 type Config struct {
-	GRPCAddr             string // gRPC サーバの listen アドレス（例 :50051）
-	MetricsAddr          string // Prometheus /metrics の listen アドレス（例 :9464）
+	GRPCAddr             string
+	MetricsAddr          string
 	DB                   DBConfig
-	OTELExporterEndpoint string // otel-collector のエンドポイント（例 otel-collector:4317）
-	AuthSecret           string // JWT シークレット
+	OTELExporterEndpoint string
+	AuthSecret           string
+
+	// ★追加：gRPC unary request timeout
+	GRPCRequestTimeout time.Duration
 }
 
-// env から Config を読み込む。
-// 既存の環境変数・デフォルト値と齟齬が出ないよう、できるだけ素直に定義しています。
 func loadConfig() Config {
 	return Config{
 		GRPCAddr:    getenv("GRPC_ADDR", ":50051"),
@@ -71,12 +80,15 @@ func loadConfig() Config {
 		DB: DBConfig{
 			Host:     getenv("DB_HOST", "127.0.0.1"),
 			Port:     getenv("DB_PORT", "3306"),
-			User:     getenv("DB_USER", "root"),     // k8s では Secret で上書き
-			Password: getenv("DB_PASSWORD", "root"), // 同上
+			User:     getenv("DB_USER", "root"),
+			Password: getenv("DB_PASSWORD", "root"),
 			Name:     getenv("DB_NAME", "grpcdb"),
 		},
 		OTELExporterEndpoint: getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317"),
 		AuthSecret:           getenv("AUTH_SECRET", "my-dev-secret-key"),
+
+		// 例: 3s / 500ms（未設定なら 3s）
+		GRPCRequestTimeout: getenvDuration("GRPC_REQUEST_TIMEOUT", 3*time.Second),
 	}
 }
 
@@ -84,10 +96,7 @@ func loadConfig() Config {
 // DB 接続 & ヘルスチェック
 //----------------------
 
-// DSN だけ別関数にしておくとテストや将来の修正がしやすい
 func buildMySQLDSN(cfg DBConfig) string {
-	// ローカル / k8s ともに使える汎用形
-	// parseTime, loc は今までの設定に合わせて調整してOK
 	return fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Asia%%2FTokyo&charset=utf8mb4&timeout=5s",
 		cfg.User,
@@ -98,7 +107,6 @@ func buildMySQLDSN(cfg DBConfig) string {
 	)
 }
 
-// 起動時に MySQL を一定回数リトライしながら ping する
 func pingMySQLWithRetry(ctx context.Context, db *sql.DB, logger *zap.Logger, maxAttempts int, interval time.Duration) error {
 	for i := 1; i <= maxAttempts; i++ {
 		if err := db.PingContext(ctx); err != nil {
@@ -125,14 +133,12 @@ func pingMySQLWithRetry(ctx context.Context, db *sql.DB, logger *zap.Logger, max
 //----------------------
 
 func main() {
-	// ---- Logger ----
 	logger, err := zap.NewProduction()
 	if err != nil {
 		panic(fmt.Sprintf("failed to init logger: %v", err))
 	}
 	defer logger.Sync()
 
-	// ---- Config 読み込み ----
 	cfg := loadConfig()
 	logger.Info("loaded config",
 		zap.String("grpc_addr", cfg.GRPCAddr),
@@ -141,9 +147,9 @@ func main() {
 		zap.String("db_port", cfg.DB.Port),
 		zap.String("db_name", cfg.DB.Name),
 		zap.String("otel_exporter_endpoint", cfg.OTELExporterEndpoint),
+		zap.Duration("grpc_request_timeout", cfg.GRPCRequestTimeout),
 	)
 
-	// ---- DB 接続 ----
 	dsn := buildMySQLDSN(cfg.DB)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -163,16 +169,19 @@ func main() {
 		zap.String("db", cfg.DB.Name),
 	)
 
-	// ---- TxManager ----
 	txMgr := mysqlrepo.NewTxManager(db, logger)
-
-	// ---- Auth（JWT）----
 	authz := auth.NewAuthenticator(logger, cfg.AuthSecret)
 
 	// ---- gRPC Server + Interceptor ----
+	// 推奨順：
+	// - Recovery: 最外でパニック保護
+	// - Logging: できれば全体計測（timeout も含む）
+	// - Timeout: handler/usecase/repo まで deadline を伝播
+	// - Auth: 認証（必要なら timeout の内側/外側は好みでOK）
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		grpcadapter.NewRecoveryUnaryInterceptor(logger),
 		grpcadapter.NewLoggingUnaryInterceptor(logger),
+		grpcadapter.NewTimeoutUnaryInterceptor(logger, cfg.GRPCRequestTimeout),
 		grpcadapter.NewAuthUnaryInterceptor(logger, authz),
 	}
 
@@ -186,22 +195,18 @@ func main() {
 		grpc.ChainStreamInterceptor(streamInterceptors...),
 	)
 
-	// ---- Health & Reflection ----
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcServer, healthSrv)
 	reflection.Register(grpcServer)
 
-	// ---- Todo Service ----
 	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db, logger)
 	uc := todo_usecase.New(repo, txMgr, logger)
 	handler := grpcadapter.NewTodoHandler(uc)
 	todov1.RegisterTodoServiceServer(grpcServer, handler)
 
-	// ---- Auth Service ----
 	authHandler := grpcadapter.NewAuthHandler(logger, cfg.AuthSecret)
 	authv1.RegisterAuthServiceServer(grpcServer, authHandler)
 
-	// ---- metrics HTTP サーバ (/metrics) ----
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
@@ -213,7 +218,6 @@ func main() {
 		}
 	}()
 
-	// ---- gRPC サーバ listen ----
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		logger.Fatal("failed to listen", zap.String("addr", cfg.GRPCAddr), zap.Error(err))
