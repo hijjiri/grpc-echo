@@ -38,18 +38,6 @@ func getenv(key, def string) string {
 	return def
 }
 
-func getenvDuration(key string, def time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return def
-	}
-	return d
-}
-
 //----------------------
 // Config struct
 //----------------------
@@ -69,11 +57,24 @@ type Config struct {
 	OTELExporterEndpoint string
 	AuthSecret           string
 
-	// ★追加：gRPC unary request timeout
+	// 追加：gRPC request timeout
 	GRPCRequestTimeout time.Duration
 }
 
-func loadConfig() Config {
+// env から Config を読み込む（既存の挙動と齟齬が出ないようにする）
+func loadConfig(logger *zap.Logger) Config {
+	// timeout は parse が必要なので、まず文字列で読む
+	rawTimeout := getenv("GRPC_REQUEST_TIMEOUT", "3s")
+	timeout, err := time.ParseDuration(rawTimeout)
+	if err != nil {
+		// 本番目線：起動失敗にせず、warn して安全なデフォルトに落とす
+		logger.Warn("invalid GRPC_REQUEST_TIMEOUT, fallback to 3s",
+			zap.String("raw", rawTimeout),
+			zap.Error(err),
+		)
+		timeout = 3 * time.Second
+	}
+
 	return Config{
 		GRPCAddr:    getenv("GRPC_ADDR", ":50051"),
 		MetricsAddr: getenv("METRICS_ADDR", ":9464"),
@@ -86,9 +87,7 @@ func loadConfig() Config {
 		},
 		OTELExporterEndpoint: getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317"),
 		AuthSecret:           getenv("AUTH_SECRET", "my-dev-secret-key"),
-
-		// 例: 3s / 500ms（未設定なら 3s）
-		GRPCRequestTimeout: getenvDuration("GRPC_REQUEST_TIMEOUT", 3*time.Second),
+		GRPCRequestTimeout:   timeout,
 	}
 }
 
@@ -133,13 +132,15 @@ func pingMySQLWithRetry(ctx context.Context, db *sql.DB, logger *zap.Logger, max
 //----------------------
 
 func main() {
+	// ---- Logger ----
 	logger, err := zap.NewProduction()
 	if err != nil {
 		panic(fmt.Sprintf("failed to init logger: %v", err))
 	}
 	defer logger.Sync()
 
-	cfg := loadConfig()
+	// ---- Config 読み込み ----
+	cfg := loadConfig(logger)
 	logger.Info("loaded config",
 		zap.String("grpc_addr", cfg.GRPCAddr),
 		zap.String("metrics_addr", cfg.MetricsAddr),
@@ -150,6 +151,7 @@ func main() {
 		zap.Duration("grpc_request_timeout", cfg.GRPCRequestTimeout),
 	)
 
+	// ---- DB 接続 ----
 	dsn := buildMySQLDSN(cfg.DB)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -169,24 +171,23 @@ func main() {
 		zap.String("db", cfg.DB.Name),
 	)
 
+	// ---- TxManager ----
 	txMgr := mysqlrepo.NewTxManager(db, logger)
+
+	// ---- Auth（JWT）----
 	authz := auth.NewAuthenticator(logger, cfg.AuthSecret)
 
 	// ---- gRPC Server + Interceptor ----
-	// 推奨順：
-	// - Recovery: 最外でパニック保護
-	// - Logging: できれば全体計測（timeout も含む）
-	// - Timeout: handler/usecase/repo まで deadline を伝播
-	// - Auth: 認証（必要なら timeout の内側/外側は好みでOK）
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		grpcadapter.NewRecoveryUnaryInterceptor(logger),
+		grpcadapter.NewTimeoutUnaryInterceptor(cfg.GRPCRequestTimeout),
 		grpcadapter.NewLoggingUnaryInterceptor(logger),
-		grpcadapter.NewTimeoutUnaryInterceptor(logger, cfg.GRPCRequestTimeout),
 		grpcadapter.NewAuthUnaryInterceptor(logger, authz),
 	}
 
 	streamInterceptors := []grpc.StreamServerInterceptor{
 		grpcadapter.NewRecoveryStreamInterceptor(logger),
+		grpcadapter.NewTimeoutStreamInterceptor(cfg.GRPCRequestTimeout),
 		grpcadapter.NewLoggingStreamInterceptor(logger),
 	}
 
@@ -195,18 +196,22 @@ func main() {
 		grpc.ChainStreamInterceptor(streamInterceptors...),
 	)
 
+	// ---- Health & Reflection ----
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcServer, healthSrv)
 	reflection.Register(grpcServer)
 
+	// ---- Todo Service ----
 	var repo domain_todo.Repository = mysqlrepo.NewTodoRepository(db, logger)
 	uc := todo_usecase.New(repo, txMgr, logger)
 	handler := grpcadapter.NewTodoHandler(uc)
 	todov1.RegisterTodoServiceServer(grpcServer, handler)
 
+	// ---- Auth Service ----
 	authHandler := grpcadapter.NewAuthHandler(logger, cfg.AuthSecret)
 	authv1.RegisterAuthServiceServer(grpcServer, authHandler)
 
+	// ---- metrics HTTP サーバ (/metrics) ----
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
@@ -218,6 +223,7 @@ func main() {
 		}
 	}()
 
+	// ---- gRPC サーバ listen ----
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		logger.Fatal("failed to listen", zap.String("addr", cfg.GRPCAddr), zap.Error(err))

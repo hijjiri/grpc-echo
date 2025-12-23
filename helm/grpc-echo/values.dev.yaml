@@ -3,6 +3,8 @@ global:
 
 config:
   authSecret: "my-dev-secret-key"
+  grpcRequestTimeout: "3s"
+
   db:
     host: "mysql"
     port: 3306

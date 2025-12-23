@@ -7,3 +7,6 @@ data:
   DB_PORT: "{{ .Values.config.db.port }}"
   DB_NAME: {{ .Values.config.db.name | quote }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterEndpoint | quote }}
+
+  # gRPC unary request timeout (Go time.ParseDuration format: "500ms", "3s", "1m")
+  GRPC_REQUEST_TIMEOUT: {{ .Values.config.grpcRequestTimeout | default "3s" | quote }}

@@ -2,33 +2,32 @@ package grpcadapter
 
 import (
 	"context"
-	"errors"
 	"time"
 
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
-// NewTimeoutUnaryInterceptor は、各 unary RPC にタイムアウトを付与する interceptor。
-// - timeout <= 0 の場合は何もしない
-// - 既に ctx に deadline がある場合は「より短い方」を優先（上書き事故を防ぐ）
-//
-// 目的：handler/usecase/repo まで ctx deadline を伝播させ、DB 等のブロックを切る
-func NewTimeoutUnaryInterceptor(logger *zap.Logger, timeout time.Duration) grpc.UnaryServerInterceptor {
-	if logger == nil {
-		logger = zap.NewNop()
+// wrappedServerStream は stream.Context() を差し替えるための薄いラッパ
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context { return w.ctx }
+
+// NewTimeoutUnaryInterceptor は gRPC Unary 全体に timeout を付与する interceptor。
+// すでに ctx に deadline が設定されていて、そちらが短い場合は上書きしない。
+func NewTimeoutUnaryInterceptor(timeout time.Duration) grpc.UnaryServerInterceptor {
+	if timeout <= 0 {
+		return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			return handler(ctx, req)
+		}
 	}
 
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if timeout <= 0 {
-			return handler(ctx, req)
-		}
-
-		// 既に deadline があるなら、より短い方を採用
-		if dl, ok := ctx.Deadline(); ok {
-			remain := time.Until(dl)
+		// 既存 deadline があるなら、それを尊重（短い方を採用）
+		if deadline, ok := ctx.Deadline(); ok {
+			remain := time.Until(deadline)
 			if remain <= timeout {
 				return handler(ctx, req)
 			}
@@ -37,26 +36,31 @@ func NewTimeoutUnaryInterceptor(logger *zap.Logger, timeout time.Duration) grpc.
 		ctx2, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		resp, err := handler(ctx2, req)
+		return handler(ctx2, req)
+	}
+}
 
-		// タイムアウト時は gRPC の DeadlineExceeded に寄せる（上位で統一）
-		if err != nil && errors.Is(err, context.DeadlineExceeded) {
-			logger.Warn("request timeout",
-				zap.String("method", info.FullMethod),
-				zap.Duration("timeout", timeout),
-			)
-			return nil, status.Error(codes.DeadlineExceeded, "request timeout")
+// NewTimeoutStreamInterceptor は gRPC Stream 全体に timeout を付与する interceptor。
+// stream は 1 RPC が長くなりがちなので、必要なら別値に分けてもOK。
+func NewTimeoutStreamInterceptor(timeout time.Duration) grpc.StreamServerInterceptor {
+	if timeout <= 0 {
+		return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+			return handler(srv, ss)
+		}
+	}
+
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		// 既存 deadline があるなら、それを尊重（短い方を採用）
+		if deadline, ok := ss.Context().Deadline(); ok {
+			remain := time.Until(deadline)
+			if remain <= timeout {
+				return handler(srv, ss)
+			}
 		}
 
-		// ctx が deadline exceeded で落ちた場合でも、err が nil のパターンはほぼ無いが保険
-		if err == nil && ctx2.Err() != nil && errors.Is(ctx2.Err(), context.DeadlineExceeded) {
-			logger.Warn("request timeout (no handler error)",
-				zap.String("method", info.FullMethod),
-				zap.Duration("timeout", timeout),
-			)
-			return nil, status.Error(codes.DeadlineExceeded, "request timeout")
-		}
+		ctx2, cancel := context.WithTimeout(ss.Context(), timeout)
+		defer cancel()
 
-		return resp, err
+		return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx2})
 	}
 }

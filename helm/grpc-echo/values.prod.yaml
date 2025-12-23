@@ -3,6 +3,8 @@ global:
 
 config:
   authSecret: "super-secret-in-prod"
+  grpcRequestTimeout: "2s"
+
   db:
     host: "prod-mysql"
     port: 3306
