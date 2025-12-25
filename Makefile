@@ -1,22 +1,11 @@
-# =========================================
-# Makefile (k8s/helm mainline)
-# - Keep proto in mainline
-# - Everything else (local dev, tools, docker run/compose, etc.) goes to Makefile.local
-# =========================================
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-# ---------------------------------------------------------
-# Basic tools (mainline needs these)
-# ---------------------------------------------------------
 KUBECTL ?= kubectl
 HELM   ?= helm
 KIND   ?= kind
 DOCKER ?= docker
 
-# ---------------------------------------------------------
-# Kubernetes / kind
-# ---------------------------------------------------------
 K8S_NAMESPACE ?= default
 KIND_CLUSTER  ?= grpc-echo
 
@@ -29,9 +18,6 @@ GRPC_IMAGE_REPO ?= grpc-echo
 GW_IMAGE_REPO   ?= grpc-http-gateway
 TAG ?= $(shell (git rev-parse --short HEAD 2>/dev/null) || date +%Y%m%d%H%M%S)
 
-# 互換: 古いコマンド/記述が残ってても動くように（徐々に消してOK）
-IMAGE_TAG ?= $(TAG)
-
 # ---------------------------------------------------------
 # Helm / Chart (A: global.imageTag 一本化)
 # ---------------------------------------------------------
@@ -42,13 +28,13 @@ ENV         ?= dev
 VALUES_FILE ?= $(CHART_DIR)/values.$(ENV).yaml
 
 # ---------------------------------------------------------
-# Proto (mainline)
+# Proto
 # ---------------------------------------------------------
 PROTO_DIRS    := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
 GATEWAY_PROTOS := $(shell find api -name '*.proto' -print)
 
 # ---------------------------------------------------------
-# k-logs UX defaults (mainline)
+# k-logs UX defaults
 # ---------------------------------------------------------
 APP       ?= grpc-echo
 POD       ?=
@@ -65,7 +51,7 @@ PREVIOUS  ?= 0
 -include Makefile.local
 
 # =========================================================
-##@ Main: Help
+# Help
 # =========================================================
 .PHONY: help
 help: ## Show help (main targets first; optional targets are listed after if Makefile.local exists)
@@ -84,7 +70,7 @@ help: ## Show help (main targets first; optional targets are listed after if Mak
 	@echo ""
 
 # =========================================================
-##@ Main: Protobuf
+# Protobuf
 # =========================================================
 .PHONY: proto
 proto: ## Generate protobuf (go / go-grpc / grpc-gateway)
@@ -109,7 +95,7 @@ proto: ## Generate protobuf (go / go-grpc / grpc-gateway)
 	done
 
 # =========================================================
-##@ Main: Helm (tag-safe)
+# Helm (tag-safe)
 # =========================================================
 .PHONY: h-template h-lint h-status h-up h-up-wait h-rollback h-uninstall h-values h-manifest
 
@@ -147,7 +133,7 @@ h-manifest: ## helm get manifest
 	$(HELM) get manifest $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
 # =========================================================
-##@ Main: Kubernetes (observability / ops)
+# Kubernetes (observability / ops)
 # =========================================================
 .PHONY: k-status k-logs k-wait k-image-check k-image-assert k-ingress-pf k-clean
 
@@ -209,7 +195,7 @@ k-clean: ## Delete unhealthy pods (ImagePullBackOff/ErrImagePull/CrashLoopBackOf
 	fi
 
 # =========================================================
-##@ Main: kind rebuild (tag-safe end-to-end)
+# kind rebuild (tag-safe end-to-end)
 # =========================================================
 .PHONY: k-load-grpc k-load-gw k-load k-rebuild-wait
 
@@ -227,7 +213,7 @@ k-rebuild-wait: k-load h-up-wait k-wait k-image-assert k-status ## Build->kind l
 	@echo "✅ Deployed with TAG=$(TAG) (ENV=$(ENV))"
 
 # =========================================================
-##@ Main: Smoke tests (Ingress port-forward assumed: make k-ingress-pf)
+# Smoke tests (Ingress port-forward assumed: make k-ingress-pf)
 # =========================================================
 .PHONY: smoke smoke-login smoke-todos
 
