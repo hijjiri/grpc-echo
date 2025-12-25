@@ -76,55 +76,58 @@ func (r *TodoRepository) Create(ctx context.Context, t *domain_todo.Todo) (*doma
 func (r *TodoRepository) List(ctx context.Context) ([]*domain_todo.Todo, error) {
 	exec := r.getExecutor(ctx)
 
-	var todos []*domain_todo.Todo
+	// Tx の中では「Tx を貼り直してリトライ」ができないので、read-retry は使わない（安全側）
+	if _, inTx := TxFromContext(ctx); inTx {
+		return r.listOnce(ctx, exec)
+	}
 
-	err := doWithRetry(ctx, DefaultReadRetry, func() error {
-		rows, err := exec.QueryContext(ctx,
-			`SELECT id, title, done FROM todos ORDER BY id`,
-		)
+	var todos []*domain_todo.Todo
+	err := doWithRetry(ctx, DefaultReadRetry, r.logger, func() error {
+		list, err := r.listOnce(ctx, exec)
 		if err != nil {
-			// ここで返した err に対して retry 判定が走る
-			r.logger.Warn("failed to query todos (will retry if retryable)",
-				zap.Error(err),
-			)
 			return err
 		}
-		defer rows.Close()
-
-		// retry ループの都合上、ここで毎回作り直す
-		todos = todos[:0]
-
-		for rows.Next() {
-			var (
-				t       domain_todo.Todo
-				doneInt int
-			)
-			if err := rows.Scan(&t.ID, &t.Title, &doneInt); err != nil {
-				r.logger.Error("failed to scan todo", zap.Error(err))
-				return fmt.Errorf("scan todo: %w", err)
-			}
-			t.Done = doneInt == 1
-			todos = append(todos, &t)
-		}
-
-		if err := rows.Err(); err != nil {
-			r.logger.Error("rows error", zap.Error(err))
-			return fmt.Errorf("rows error: %w", err)
-		}
-
+		todos = list
 		return nil
 	})
 	if err != nil {
-		// doWithRetry が最終的に返したエラーをそのまま包む
-		r.logger.Error("failed to list todos",
-			zap.Error(err),
-		)
+		r.logger.Error("failed to list todos", zap.Error(err))
 		return nil, fmt.Errorf("query todos: %w", err)
 	}
 
 	r.logger.Info("todos listed",
 		zap.Int("count", len(todos)),
 	)
+
+	return todos, nil
+}
+
+// listOnce は 1 回だけ SELECT して全件読み切る（リトライの最小単位）
+func (r *TodoRepository) listOnce(ctx context.Context, exec executor) ([]*domain_todo.Todo, error) {
+	rows, err := exec.QueryContext(ctx,
+		`SELECT id, title, done FROM todos ORDER BY id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var todos []*domain_todo.Todo
+	for rows.Next() {
+		var (
+			t       domain_todo.Todo
+			doneInt int
+		)
+		if err := rows.Scan(&t.ID, &t.Title, &doneInt); err != nil {
+			return nil, err
+		}
+		t.Done = doneInt == 1
+		todos = append(todos, &t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	return todos, nil
 }
@@ -187,7 +190,6 @@ func (r *TodoRepository) Delete(ctx context.Context, id int64) (bool, error) {
 	}
 
 	if n == 0 {
-		// 削除対象なし
 		r.logger.Info("no todo deleted", zap.Int64("id", id))
 		return false, nil
 	}

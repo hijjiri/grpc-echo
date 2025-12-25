@@ -1,0 +1,183 @@
+# =========================================
+# Makefile.local (Optional)
+# - Local development helpers
+# - Tools/Test helpers
+# - Extra port-forward helpers
+#
+# This file is optional and is included from Makefile via:
+#   -include Makefile.local
+# =========================================
+
+# ---------------------------------------------------------
+# Basic tools (optional)
+# ---------------------------------------------------------
+GO             ?= go
+GO_RUN         ?= $(GO) run
+GO_BUILD       ?= $(GO) build
+GRPCURL        ?= grpcurl
+
+DOCKER_COMPOSE ?= docker-compose
+
+# ---------------------------------------------------------
+# Addresses (local dev)
+# ---------------------------------------------------------
+GRPC_ADDR          ?= localhost:50051
+HTTP_GATEWAY_ADDR  ?= localhost:8081
+METRICS_ADDR       ?= localhost:9464
+
+GRPC_HOST          := $(word 1,$(subst :, ,$(GRPC_ADDR)))
+GRPC_PORT          := $(word 2,$(subst :, ,$(GRPC_ADDR)))
+
+HTTP_GATEWAY_HOST  := $(word 1,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
+HTTP_GATEWAY_PORT  := $(word 2,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
+
+METRICS_HOST       := $(word 1,$(subst :, ,$(METRICS_ADDR)))
+METRICS_PORT       := $(word 2,$(subst :, ,$(METRICS_ADDR)))
+
+SERVICE ?=
+
+# ---------------------------------------------------------
+# JWT (optional)
+# ---------------------------------------------------------
+JWT_SECRET ?= my-dev-secret-key
+
+# =========================================================
+##@ Optional: Local dev (Go)
+# =========================================================
+.PHONY: run-server build-server run-gateway
+
+run-server: ## (Optional) Run gRPC server locally
+	$(GO_RUN) ./cmd/server
+
+build-server: ## (Optional) Build gRPC server binary
+	$(GO_BUILD) ./cmd/server
+
+run-gateway: ## (Optional) Run HTTP gateway locally
+	$(GO_RUN) ./cmd/http_gateway
+
+# =========================================================
+##@ Optional: Local dev (Docker run)
+# =========================================================
+.PHONY: docker-run-grpc docker-run-gw docker-stop-grpc docker-stop-gw
+
+docker-run-grpc: ## (Optional) Run grpc-echo container locally (repo=GRPC_IMAGE_REPO tag=TAG)
+	$(DOCKER) run --rm \
+	  -p $(GRPC_PORT):50051 \
+	  --name grpc-echo \
+	  $(GRPC_IMAGE_REPO):$(TAG)
+
+docker-run-gw: ## (Optional) Run http-gateway container locally (repo=GW_IMAGE_REPO tag=TAG)
+	$(DOCKER) run --rm \
+	  -p $(HTTP_GATEWAY_PORT):8081 \
+	  -e GRPC_SERVER_ADDR=$(GRPC_ADDR) \
+	  -e HTTP_LISTEN_ADDR=:8081 \
+	  --name grpc-http-gateway \
+	  $(GW_IMAGE_REPO):$(TAG)
+
+docker-stop-grpc: ## (Optional) Stop grpc-echo container
+	- $(DOCKER) stop grpc-echo >/dev/null 2>&1 || true
+
+docker-stop-gw: ## (Optional) Stop http-gateway container
+	- $(DOCKER) stop grpc-http-gateway >/dev/null 2>&1 || true
+
+# =========================================================
+##@ Optional: Local dev (docker-compose)
+# =========================================================
+.PHONY: compose-up compose-db compose-down compose-logs compose-ps
+
+compose-up: ## (Optional) docker-compose up --build
+	$(DOCKER_COMPOSE) up --build
+
+compose-db: ## (Optional) docker-compose up -d db
+	$(DOCKER_COMPOSE) up -d db
+
+compose-down: ## (Optional) docker-compose down
+	$(DOCKER_COMPOSE) down
+
+compose-logs: ## (Optional) docker-compose logs -f
+	$(DOCKER_COMPOSE) logs -f
+
+compose-ps: ## (Optional) docker-compose ps
+	$(DOCKER_COMPOSE) ps
+
+# =========================================================
+##@ Optional: Tools / Test
+# =========================================================
+.PHONY: fmt vet lint test build tree
+
+fmt: ## (Optional) gofmt all *.go
+	@echo "==> gofmt all *.go"
+	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
+
+vet: ## (Optional) go vet ./...
+	$(GO) vet ./...
+
+lint: fmt vet ## (Optional) fmt + vet
+
+test: ## (Optional) go test ./...
+	$(GO) test ./...
+
+build: ## (Optional) go build ./...
+	$(GO) build ./...
+
+tree: ## (Optional) tree -L 3
+	tree -L 3
+
+# =========================================================
+##@ Optional: Health / REPL / JWT helper
+# =========================================================
+.PHONY: health evans jwt jwt-print
+
+health: ## (Optional) gRPC health check (SERVICE=... optional)
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Checking overall health..."; \
+		$(GRPCURL) -plaintext -d '{}' $(GRPC_ADDR) grpc.health.v1.Health/Check; \
+	else \
+		echo "Checking service: $(SERVICE)"; \
+		$(GRPCURL) -plaintext -d '{"service":"$(SERVICE)"}' $(GRPC_ADDR) grpc.health.v1.Health/Check; \
+	fi
+
+evans: ## (Optional) evans repl to gRPC
+	evans --host $(GRPC_HOST) --port $(GRPC_PORT) -r repl
+
+jwt-print: ## (Optional) Print token only
+	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
+
+jwt: ## (Optional) Print 'export TOKEN=...' for eval
+	@cd cmd/jwt_gen && \
+	  token=$$(AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .); \
+	  echo "export TOKEN=$$token"
+
+# =========================================================
+##@ Optional: Extra Kubernetes port-forward helpers
+# =========================================================
+.PHONY: k-grpc k-gw k-metrics k-graf k-ingress k-ingress-logs k-mysql k-mysql-logs k-otel-logs
+
+k-grpc: ## (Optional) port-forward grpc-echo service (grpc)
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(GRPC_PORT):50051
+
+k-gw: ## (Optional) port-forward http-gateway service
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway $(HTTP_GATEWAY_PORT):8081
+
+k-metrics: ## (Optional) port-forward metrics
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(METRICS_PORT):9464
+
+k-graf: ## (Optional) port-forward grafana (localhost:3000)
+	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grafana 3000:3000
+
+k-ingress: ## (Optional) get ingress-nginx pods/svc
+	$(KUBECTL) get pods,svc -n ingress-nginx -o wide
+
+k-ingress-logs: ## (Optional) tail ingress-nginx controller logs
+	$(KUBECTL) logs -n ingress-nginx deploy/ingress-nginx-controller -f
+
+k-mysql: ## (Optional) login mysql inside k8s (root/root, grpcdb)
+	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) \
+	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
+	  -- mysql -uroot -proot grpcdb
+
+k-mysql-logs: ## (Optional) tail mysql logs
+	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
+
+k-otel-logs: ## (Optional) tail otel-collector logs
+	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f

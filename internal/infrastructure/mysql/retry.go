@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // RetryPolicy は「何回・どのくらい待つか」をまとめた設定。
@@ -25,7 +27,11 @@ var DefaultReadRetry = RetryPolicy{
 
 // doWithRetry は、retryable なエラーのみをバックオフ付きで再実行する。
 // - ctx の deadline/cancel を尊重して即中断する
-func doWithRetry(ctx context.Context, policy RetryPolicy, fn func() error) error {
+// - 観測用：retry が発動した時だけ warn を出す（平常時ノイズゼロ）
+func doWithRetry(ctx context.Context, policy RetryPolicy, logger *zap.Logger, fn func() error) error {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if policy.MaxAttempts <= 0 {
 		policy.MaxAttempts = 1
 	}
@@ -61,6 +67,15 @@ func doWithRetry(ctx context.Context, policy RetryPolicy, fn func() error) error
 
 		// backoff
 		sleep := backoff(policy.BaseBackoff, policy.MaxBackoff, attempt)
+
+		// ★観測用ログ（retry が発動した時だけ）
+		logger.Warn("db op failed (retrying)",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", policy.MaxAttempts),
+			zap.Duration("sleep", sleep),
+			zap.Error(err),
+		)
+
 		if err := sleepWithContext(ctx, sleep); err != nil {
 			// ctx timeout/cancel
 			return err
@@ -112,7 +127,7 @@ func isRetryableDBErr(err error) bool {
 		return true
 	}
 
-	// net.Error の temporary/timeout
+	// net.Error の timeout/temporary
 	var ne net.Error
 	if errors.As(err, &ne) {
 		if ne.Timeout() {
