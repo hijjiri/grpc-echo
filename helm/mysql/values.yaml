@@ -1,0 +1,17 @@
+image:
+  repository: mysql
+  tag: "8.4.0"
+  pullPolicy: IfNotPresent
+
+auth:
+  rootPassword: "root"
+  database: "grpcdb"
+
+service:
+  port: 3306
+
+persistence:
+  enabled: false
+  # enabled=true のときだけ使う
+  size: 1Gi
+  storageClassName: ""  # 空ならクラスターのデフォルト StorageClass に任せる

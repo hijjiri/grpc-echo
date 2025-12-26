@@ -247,3 +247,38 @@ smoke-todos: ## Smoke: list todos via ingress (auto token)
 	echo ""
 
 smoke: smoke-todos ## Smoke: login + list todos via ingress (requires k-ingress-pf running)
+
+# =========================================================
+##@ Main: MySQL (Helm)
+# - mysql is a separate Helm release (SoT is Helm)
+# =========================================================
+.PHONY: mysql-up mysql-up-wait mysql-status mysql-logs mysql-wait mysql-shell mysql-init-check mysql-uninstall
+
+MYSQL_RELEASE   ?= mysql
+MYSQL_CHART_DIR ?= ./helm/mysql
+
+mysql-up: ## Deploy mysql (no wait)
+	$(HELM) upgrade --install $(MYSQL_RELEASE) $(MYSQL_CHART_DIR) -n $(K8S_NAMESPACE)
+
+mysql-up-wait: ## Deploy mysql (wait/atomic)
+	$(HELM) upgrade --install $(MYSQL_RELEASE) $(MYSQL_CHART_DIR) -n $(K8S_NAMESPACE) \
+	  --wait --timeout 10m --atomic
+
+mysql-wait: ## Wait mysql StatefulSet rollout
+	$(KUBECTL) rollout status sts/mysql -n $(K8S_NAMESPACE) --timeout=10m
+
+mysql-status: ## Show mysql resources (sts/pod/svc)
+	@$(KUBECTL) get sts,pod,svc -n $(K8S_NAMESPACE) | egrep -n 'NAME|mysql' || true
+
+mysql-logs: ## Tail mysql logs (sts/mysql)
+	$(KUBECTL) logs -n $(K8S_NAMESPACE) -f sts/mysql --tail=200
+
+mysql-shell: ## Exec mysql client in mysql-0 (root)
+	$(KUBECTL) exec -n $(K8S_NAMESPACE) -it mysql-0 -- sh -lc 'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD"'
+
+mysql-init-check: ## Check init.sql applied (SHOW TABLES in grpcdb)
+	$(KUBECTL) exec -n $(K8S_NAMESPACE) mysql-0 -- sh -lc 'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "USE grpcdb; SHOW TABLES;"'
+
+mysql-uninstall: ## Uninstall mysql release (DANGEROUS) [CONFIRM=1]
+	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
+	$(HELM) uninstall $(MYSQL_RELEASE) -n $(K8S_NAMESPACE)

@@ -120,8 +120,8 @@ test: ## (Optional) go test ./...
 build: ## (Optional) go build ./...
 	$(GO) build ./...
 
-tree: ## (Optional) tree -L 3
-	tree -L 3
+tree: ## (Optional) tree -L 4
+	tree -L 4
 
 # =========================================================
 ##@ Optional: Health / REPL / JWT helper
