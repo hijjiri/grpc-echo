@@ -181,3 +181,35 @@ k-mysql-logs: ## (Optional) tail mysql logs
 
 k-otel-logs: ## (Optional) tail otel-collector logs
 	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
+
+
+# Optional local overrides / convenience targets
+# This file is ignored by git (recommended). Keep machine-specific stuff here.
+
+K8S_NAMESPACE ?= default
+KIND_CLUSTER  ?= grpc-echo
+
+.PHONY: kind-up kind-down hosts-up hosts-down
+
+kind-up: ## Create kind cluster if missing (name=KIND_CLUSTER)
+	@set -euo pipefail; \
+	if kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	  echo "✅ kind cluster exists: $(KIND_CLUSTER)"; \
+	else \
+	  echo "==> creating kind cluster: $(KIND_CLUSTER)"; \
+	  kind create cluster --name "$(KIND_CLUSTER)"; \
+	fi
+
+kind-down: ## Delete kind cluster (DANGEROUS) [CONFIRM=1]
+	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
+	kind delete cluster --name "$(KIND_CLUSTER)"
+
+hosts-up: ## Add grpc-echo.local to /etc/hosts (DANGEROUS) [CONFIRM=1]
+	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
+	@grep -q "grpc-echo.local" /etc/hosts || echo "127.0.0.1 grpc-echo.local" | sudo tee -a /etc/hosts >/dev/null
+	@echo "✅ /etc/hosts updated (grpc-echo.local)"
+
+hosts-down: ## Remove grpc-echo.local from /etc/hosts (DANGEROUS) [CONFIRM=1]
+	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
+	@sudo sed -i.bak '/grpc-echo\.local/d' /etc/hosts
+	@echo "✅ /etc/hosts cleaned (grpc-echo.local)"
