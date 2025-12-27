@@ -32,6 +32,7 @@ CHART_DIR    ?= ./helm/grpc-echo
 
 ENV         ?= dev
 VALUES_FILE ?= $(CHART_DIR)/values.$(ENV).yaml
+MYSQL_DUMP ?= ./tmp/grpcdb.sql
 
 # ---------------------------------------------------------
 # Proto
@@ -310,20 +311,21 @@ mysql-init-check: ## Check schema/table count inside mysql (uses MYSQL_ROOT_PASS
 	@$(KUBECTL) exec -n $(K8S_NAMESPACE) -it $(MYSQL_POD) -- sh -lc \
 	  'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "USE $(MYSQL_DB); SHOW TABLES; SELECT COUNT(*) FROM todos;"'
 
-mysql-backup: ## mysqldump grpcdb from pod -> MYSQL_DUMP (local file)
+mysql-backup: ## Backup grpcdb -> MYSQL_DUMP (local file)
 	@set -euo pipefail; \
-	ns="$(K8S_NAMESPACE)"; out="$(MYSQL_DUMP)"; \
-	echo "==> mysqldump $(MYSQL_DB) from $(MYSQL_POD) -> $$out"; \
-	$(KUBECTL) exec -n $$ns $(MYSQL_POD) -- sh -lc 'mysqldump -uroot -p"$$MYSQL_ROOT_PASSWORD" $(MYSQL_DB)' > "$$out"; \
-	ls -lh "$$out"; tail -n 3 "$$out" || true
+	out="$(MYSQL_DUMP)"; \
+	mkdir -p "$$(dirname "$$out")"; \
+	echo "==> mysqldump grpcdb from mysql-0 -> $$out"; \
+	$(KUBECTL) exec -n $(K8S_NAMESPACE) mysql-0 -- sh -lc 'mysqldump -uroot -p"$$MYSQL_ROOT_PASSWORD" grpcdb' > "$$out"; \
+	ls -lh "$$out"
 
-mysql-restore: ## Restore MYSQL_DUMP (local file) -> mysql pod (grpcdb)
+mysql-restore: ## Restore MYSQL_DUMP -> grpcdb
 	@set -euo pipefail; \
-	ns="$(K8S_NAMESPACE)"; in="$(MYSQL_DUMP)"; \
-	[ -f "$$in" ] || (echo "❌ dump not found: $$in"; exit 1); \
-	echo "==> restore $$in -> $(MYSQL_POD) db=$(MYSQL_DB)"; \
-	$(KUBECTL) exec -n $$ns -i $(MYSQL_POD) -- sh -lc 'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD" $(MYSQL_DB)' < "$$in"; \
-	echo "✅ restore done"
+	in="$(MYSQL_DUMP)"; \
+	test -f "$$in" || (echo "missing dump: $$in" && exit 1); \
+	echo "==> restore $$in -> grpcdb (mysql-0)"; \
+	$(KUBECTL) exec -n $(K8S_NAMESPACE) -i mysql-0 -- sh -lc 'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD" grpcdb' < "$$in"; \
+	echo "restored"
 
 mysql-pvc: ## List PVCs for mysql (StatefulSet volumeClaimTemplates)
 	@$(KUBECTL) get pvc -n $(K8S_NAMESPACE) | grep -E 'data-$(MYSQL_RELEASE)-' || echo "NO PVC"
