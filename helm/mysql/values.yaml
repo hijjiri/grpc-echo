@@ -4,7 +4,6 @@ image:
   pullPolicy: IfNotPresent
 
 auth:
-  # dev/kind 用。現状どおり root を使う前提（本番では Secret 管理へ）
   rootPassword: "root"
   database: "grpcdb"
 
@@ -12,16 +11,6 @@ service:
   port: 3306
 
 persistence:
-  # ★永続化したいなら true にする（まずはここを ON にするのが最短）
   enabled: true
-
-  # enabled=true のときだけ使う
   size: 1Gi
-
-  # 空ならクラスターのデフォルト StorageClass に任せる
-  # （あなたの環境は standard が default）
   storageClassName: ""
-
-  # 1pod の MySQL なら基本これでOK
-  accessModes:
-    - ReadWriteOnce

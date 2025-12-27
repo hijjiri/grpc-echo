@@ -10,4 +10,3 @@ spec:
       targetPort: mysql
   selector:
     app.kubernetes.io/name: {{ include "mysql.fullname" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
