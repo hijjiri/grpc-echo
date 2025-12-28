@@ -306,30 +306,80 @@ ingress-reset: ingress-clean ingress-ensure ## Cleanup then reinstall ingress-ng
 # =========================================================
 ##@ /etc/hosts (optional)
 # =========================================================
+HOSTS_FILE ?= /etc/hosts
+HOSTS_IP   ?= 127.0.0.1
+
 .PHONY: hosts-ensure hosts-up hosts-down
 
-hosts-ensure: ## Optionally ensure /etc/hosts has INGRESS_HOST -> 127.0.0.1 (AUTO_HOSTS=1 requires CONFIRM=1)
+hosts-ensure: ## Optionally ensure /etc/hosts has INGRESS_HOST -> 127.0.0.1 (AUTO_HOSTS=1; first time requires CONFIRM=1)
 > @set -euo pipefail; \
-	if [ "$(AUTO_HOSTS)" != "1" ]; then \
-	  echo "==> hosts update skipped (AUTO_HOSTS=$(AUTO_HOSTS))"; \
-	  echo "    If you want it: make hosts-up CONFIRM=1"; \
-	  exit 0; \
-	fi; \
-	if [ "$(CONFIRM)" != "1" ]; then \
-	  echo "❌ Refusing to edit /etc/hosts without CONFIRM=1"; \
-	  exit 1; \
-	fi; \
-	$(MAKE) --no-print-directory hosts-up CONFIRM=1
+>   hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; ip="$(HOSTS_IP)"; \
+>   if [ "$(AUTO_HOSTS)" != "1" ]; then \
+>     echo "==> hosts update skipped (AUTO_HOSTS=$(AUTO_HOSTS))"; \
+>     echo "    If you want it: make hosts-up CONFIRM=1"; \
+>     exit 0; \
+>   fi; \
+>   if sudo grep -qE "^[[:space:]]*$$ip[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
+>     echo "✅ hosts already present: $$host -> $$ip"; \
+>     exit 0; \
+>   fi; \
+>   if [ "$(CONFIRM)" != "1" ]; then \
+>     echo "❌ Refusing to edit $$hf without CONFIRM=1 (needed once)"; \
+>     echo "   Run: make hosts-up CONFIRM=1"; \
+>     exit 1; \
+>   fi; \
+>   $(MAKE) --no-print-directory hosts-up CONFIRM=1
 
 hosts-up: ## Add INGRESS_HOST to /etc/hosts (DANGEROUS) [CONFIRM=1]
-> @if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
-> @grep -qE "^[0-9\.]+\s+$(INGRESS_HOST)(\s|$$)" /etc/hosts || echo "127.0.0.1 $(INGRESS_HOST)" | sudo tee -a /etc/hosts >/dev/null
-> @echo "✅ /etc/hosts updated ($(INGRESS_HOST))"
+> @set -euo pipefail; \
+>   if [ "$(CONFIRM)" != "1" ]; then \
+>     echo "❌ Refusing (dangerous). Run with CONFIRM=1"; \
+>     exit 1; \
+>   fi; \
+>   hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; ip="$(HOSTS_IP)"; \
+>   echo "==> ensuring hosts entry: $$host -> $$ip (file: $$hf)"; \
+>   if sudo grep -qE "^[[:space:]]*$$ip[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
+>     echo "✅ already present"; \
+>     exit 0; \
+>   fi; \
+>   if sudo grep -qE "^[[:space:]]*[0-9.]+[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
+>     echo "❌ $$host already exists with a different IP:"; \
+>     sudo grep -nE "^[[:space:]]*[0-9.]+[[:space:]]+$$host([[:space:]]|$$)" "$$hf" || true; \
+>     echo "   Please edit $$hf manually, then rerun."; \
+>     exit 1; \
+>   fi; \
+>   ts="$$(date +%Y%m%d%H%M%S)"; \
+>   echo "==> backup $$hf -> $$hf.bak.$$ts"; \
+>   sudo cp -a "$$hf" "$$hf.bak.$$ts"; \
+>   echo "$$ip $$host" | sudo tee -a "$$hf" >/dev/null; \
+>   echo "✅ added: $$ip $$host"; \
+>   (getent hosts "$$host" || true) | sed -n '1,2p' || true
 
 hosts-down: ## Remove INGRESS_HOST from /etc/hosts (DANGEROUS) [CONFIRM=1]
-> @if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
-> @sudo sed -i.bak "/$(INGRESS_HOST)/d" /etc/hosts
-> @echo "✅ /etc/hosts cleaned ($(INGRESS_HOST))"
+> @set -euo pipefail; \
+	if [ "$(CONFIRM)" != "1" ]; then \
+	  echo "❌ Refusing (dangerous). Run with CONFIRM=1"; exit 1; \
+	fi; \
+	hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; \
+	echo "==> removing hosts entry for: $$host (file: $$hf)"; \
+	ts="$$(date +%Y%m%d%H%M%S)"; \
+	echo "==> backup $$hf -> $$hf.bak.$$ts"; \
+	sudo cp -a "$$hf" "$$hf.bak.$$ts"; \
+	sudo awk -v h="$$host" ' \
+	  /^[[:space:]]*#/ { print; next } \
+	  NF==0 { print; next } \
+	  $$1 !~ /^[0-9.]+$$/ && $$1 !~ /^[0-9A-Fa-f:]+(%[^[:space:]]+)?$$/ { print; next } \
+	  { \
+	    out=$$1; keep=0; \
+	    for (i=2; i<=NF; i++) { \
+	      if ($$i != h) { out=out " " $$i; keep=1 } \
+	    } \
+	    if (keep==1) print out; \
+	  } \
+	' "$$hf" | sudo tee "$$hf.tmp" >/dev/null; \
+	sudo mv "$$hf.tmp" "$$hf"; \
+	echo "✅ removed (if existed)"; \
+	(getent -s files hosts "$$host" || true) | sed -n '1,2p' || true
 
 # =========================================================
 ##@ Observability (Kustomize apply + wait)
