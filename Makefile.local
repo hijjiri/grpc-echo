@@ -1,4 +1,13 @@
-# Optional overrides ONLY (NO TARGETS)
+# =========================================
+# Makefile.local (Optional overrides ONLY)
+# Policy:
+#   - NO TARGETS here
+#   - Put only variable overrides for your machine
+# =========================================
+
+# kind: bind to loopback for safety (WSL/Docker Desktop friendly)
 KIND_LISTEN_ADDR = 127.0.0.1
+
+# host ports (avoid conflicts with other services)
 INGRESS_HTTP_PORT = 18080
 INGRESS_HTTPS_PORT = 18443

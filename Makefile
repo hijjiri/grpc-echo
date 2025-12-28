@@ -33,7 +33,7 @@ TAG ?= $(shell (git rev-parse --short HEAD 2>/dev/null) || date +%Y%m%d%H%M%S)
 HELM_RELEASE ?= grpc-echo
 CHART_DIR    ?= ./helm/grpc-echo
 
-ENV         ?= dev
+ENV ?= dev
 VALUES_FILE ?= $(CHART_DIR)/values.$(ENV).yaml
 
 # =========================================================
@@ -55,20 +55,20 @@ GATEWAY_PROTOS := $(shell find api -name '*.proto' -print)
 # =========================================================
 # Optional local dev tools / addresses
 # =========================================================
-GO       ?= go
-GO_RUN   ?= $(GO) run
+GO ?= go
+GO_RUN ?= $(GO) run
 GO_BUILD ?= $(GO) build
 
 GRPCURL ?= grpcurl
 EVANS   ?= evans
 
-GRPC_ADDR         ?= localhost:50051
+GRPC_ADDR ?= localhost:50051
 HTTP_GATEWAY_ADDR ?= localhost:8081
-METRICS_ADDR      ?= localhost:9464
+METRICS_ADDR ?= localhost:9464
 
-GRPC_PORT         := $(word 2,$(subst :, ,$(GRPC_ADDR)))
+GRPC_PORT := $(word 2,$(subst :, ,$(GRPC_ADDR)))
 HTTP_GATEWAY_PORT := $(word 2,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
-METRICS_PORT      := $(word 2,$(subst :, ,$(METRICS_ADDR)))
+METRICS_PORT := $(word 2,$(subst :, ,$(METRICS_ADDR)))
 
 SERVICE ?=
 JWT_SECRET ?= my-dev-secret-key
@@ -86,32 +86,36 @@ DOCKER_COMPOSE ?= $(shell \
 # =========================================================
 # Golden Path switches
 # =========================================================
-AUTO         ?= 0   # AUTO=1 -> direct smoke automatically (NO port-forward)
-AUTO_KIND    ?= 1
+# AUTO=1 -> direct smoke automatically (NO port-forward)
+AUTO ?= 0
+AUTO_KIND ?= 1
 AUTO_INGRESS ?= 1
-AUTO_HOSTS   ?= 0   # edit /etc/hosts (requires CONFIRM=1)
-AUTO_OBS     ?= 0   # apply observability via kustomize + wait
-CONFIRM      ?= 0
+# edit /etc/hosts (requires CONFIRM=1)
+AUTO_HOSTS ?= 0
+# apply observability via kustomize + wait
+AUTO_OBS ?= 0
+CONFIRM ?= 0
 
 # =========================================================
 # Ingress (kind optimized: NodePort + extraPortMappings)
 # =========================================================
-INGRESS_NS          ?= ingress-nginx
-INGRESS_RELEASE     ?= ingress-nginx
-INGRESS_CHART       ?= ingress-nginx/ingress-nginx
+INGRESS_NS ?= ingress-nginx
+INGRESS_RELEASE ?= ingress-nginx
+INGRESS_CHART ?= ingress-nginx/ingress-nginx
 INGRESS_VALUES_KIND ?= ./k8s/ingress-nginx/values.kind.yaml
 
-INGRESS_HOST        ?= grpc-echo.local
-INGRESS_HTTP_PORT   ?= 8080
-INGRESS_HTTPS_PORT  ?= 8443
+INGRESS_HOST ?= grpc-echo.local
+INGRESS_HTTP_PORT ?= 8080
+INGRESS_HTTPS_PORT ?= 8443
 
-INGRESS_NODEPORT_HTTP  ?= 30080
+INGRESS_NODEPORT_HTTP ?= 30080
 INGRESS_NODEPORT_HTTPS ?= 30443
 
 # kind config generation (auto)
-KIND_CONFIG_DIR  ?= .tmp
+KIND_CONFIG_DIR ?= .tmp
 KIND_CONFIG_FILE ?= $(KIND_CONFIG_DIR)/kind-config.yaml
-KIND_LISTEN_ADDR ?= 0.0.0.0
+# Safer default; override in Makefile.local if you need 0.0.0.0
+KIND_LISTEN_ADDR ?= 127.0.0.1
 
 # =========================================================
 # Observability (Kustomize apply + wait)
@@ -135,9 +139,10 @@ help: ## Show help
 	' $(MAKEFILE_LIST)
 > @echo ""
 > @echo "Examples:"
-> @echo "  make gp AUTO=1 AUTO_OBS=1                  # kind+ingress+app+mysql(+obs) + direct smoke"
-> @echo "  make gp AUTO=1 AUTO_HOSTS=1 CONFIRM=1      # + /etc/hosts update"
-> @echo "  make proto                                 # generate protobuf"
+> @echo "  make gp AUTO=1                                # kind+ingress+app+mysql + direct smoke"
+> @echo "  make gp AUTO=1 AUTO_HOSTS=1 CONFIRM=1          # + /etc/hosts update"
+> @echo "  make proto                                    # generate protobuf"
+> @echo "  make diag                                     # troubleshooting snapshot"
 > @echo ""
 
 # =========================================================
@@ -161,15 +166,17 @@ preflight: ## Preflight checks (tools)
 	for c in $(KUBECTL) $(HELM) $(KIND) $(DOCKER); do \
 	  command -v $$c >/dev/null 2>&1 || (echo "❌ missing command: $$c" && exit 1); \
 	done; \
+	if ! $(DOCKER) buildx version >/dev/null 2>&1; then \
+	  echo "⚠️ docker buildx not found (legacy builder will be used; Docker may warn)"; \
+	fi; \
 	echo "✅ tools OK"
 
 check-values: ## Check ENV/VALUES_FILE exists
 > @set -euo pipefail; \
 	test -f "$(VALUES_FILE)" || (echo "❌ values file not found: $(VALUES_FILE) (ENV=$(ENV))" && exit 1)
 
-ports-check: ## Best-effort check host ports availability (skip if kind already owns them)
+ports-check: ## Check host ports availability (skip if kind already owns them)
 > @set -euo pipefail; \
-	# If kind cluster already exists and publishes the expected ports, treat it as OK. \
 	if $(KIND) get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
 	  line="$$( $(DOCKER) ps --format '{{.Names}} {{.Ports}}' | awk '$$1=="$(KIND_CLUSTER)-control-plane"{print $$0}' )"; \
 	  if [ -n "$$line" ] && echo "$$line" | grep -qE "[:.]$(INGRESS_HTTP_PORT)->$(INGRESS_NODEPORT_HTTP)/tcp" && echo "$$line" | grep -qE "[:.]$(INGRESS_HTTPS_PORT)->$(INGRESS_NODEPORT_HTTPS)/tcp"; then \
@@ -181,7 +188,6 @@ ports-check: ## Best-effort check host ports availability (skip if kind already 
 	  echo "   hint: update Makefile.local and recreate cluster: make kind-down CONFIRM=1 && make kind-ensure"; \
 	  exit 1; \
 	fi; \
-	# Otherwise, require ports to be free before creating the cluster. \
 	if command -v ss >/dev/null 2>&1; then \
 	  for p in $(INGRESS_HTTP_PORT) $(INGRESS_HTTPS_PORT); do \
 	    if ss -lnt | awk '{print $$4}' | grep -qE "[:.]$$p$$"; then \
@@ -197,7 +203,6 @@ ports-check: ## Best-effort check host ports availability (skip if kind already 
 ##@ Golden Path
 # =========================================================
 .PHONY: gp gp-auto
-
 gp: preflight ports-check kind-ensure guard-context ingress-ensure hosts-ensure obs-ensure check-values mysql-up-wait k-rebuild-wait gp-maybe-smoke ## One-command deploy (AUTO=1 -> direct smoke)
 gp-auto: ## Fully automatic example
 > @$(MAKE) --no-print-directory gp AUTO=1 AUTO_HOSTS=1
@@ -207,8 +212,7 @@ gp-auto: ## Fully automatic example
 # =========================================================
 .PHONY: kind-config-gen kind-ensure kind-down
 
-# ★今回の根本修正：heredoc廃止 & コピペ安全（TAB不要）
-kind-config-gen: ## Generate kind config (host:8080/8443 -> node:30080/30443)
+kind-config-gen: ## Generate kind config (host ports -> node NodePorts)
 > @set -euo pipefail; \
 	mkdir -p "$(KIND_CONFIG_DIR)"; \
 	{ \
@@ -259,7 +263,7 @@ kind-down: ## Delete kind cluster (DANGEROUS) [CONFIRM=1]
 # =========================================================
 ##@ ingress-nginx (kind optimized)
 # =========================================================
-.PHONY: ingress-ensure ingress-status
+.PHONY: ingress-ensure ingress-status ingress-clean ingress-reset
 
 ingress-ensure: ## Ensure ingress-nginx installed (AUTO_INGRESS=1) [NodePort 30080/30443]
 > @set -euo pipefail; \
@@ -282,6 +286,22 @@ ingress-ensure: ## Ensure ingress-nginx installed (AUTO_INGRESS=1) [NodePort 300
 ingress-status: ## Show ingress-nginx svc/deploy
 > @$(MAKE) --no-print-directory guard-context
 > @$(KUBECTL) get deploy,svc -n $(INGRESS_NS) | sed -n '1,200p'
+
+ingress-clean: ## Cleanup ingress-nginx leftovers (DANGEROUS) [CONFIRM=1]
+> @if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
+> @set -euo pipefail; \
+	$(MAKE) --no-print-directory guard-context; \
+	echo "==> deleting namespace $(INGRESS_NS) (if exists)"; \
+	$(KUBECTL) delete ns "$(INGRESS_NS)" --wait >/dev/null 2>&1 || true; \
+	echo "==> deleting cluster-scoped leftovers (filter: ingress-nginx)"; \
+	cr="$$( $(KUBECTL) get clusterrole -o name | grep -E 'ingress-nginx|ingressnginx' || true )"; \
+	crb="$$( $(KUBECTL) get clusterrolebinding -o name | grep -E 'ingress-nginx|ingressnginx' || true )"; \
+	if [ -n "$$cr" ]; then echo "$$cr" | xargs -r $(KUBECTL) delete; else echo "  (no clusterrole matched)"; fi; \
+	if [ -n "$$crb" ]; then echo "$$crb" | xargs -r $(KUBECTL) delete; else echo "  (no clusterrolebinding matched)"; fi; \
+	echo "✅ ingress-nginx cleaned"
+
+ingress-reset: ingress-clean ingress-ensure ## Cleanup then reinstall ingress-nginx (DANGEROUS) [CONFIRM=1]
+> @echo "✅ ingress-nginx reset done"
 
 # =========================================================
 ##@ /etc/hosts (optional)
@@ -316,7 +336,7 @@ hosts-down: ## Remove INGRESS_HOST from /etc/hosts (DANGEROUS) [CONFIRM=1]
 # =========================================================
 .PHONY: obs-ensure obs-up obs-wait obs-status obs-down
 
-obs-ensure: ## Optionally apply observability via kustomize and wait (AUTO_OBS=1)
+obs-ensure: ## Optionally apply observability stack via kustomize and wait (AUTO_OBS=1)
 > @set -euo pipefail; \
 	if [ "$(AUTO_OBS)" != "1" ]; then \
 	  echo "==> observability ensure skipped (AUTO_OBS=$(AUTO_OBS))"; \
@@ -501,20 +521,20 @@ gp-maybe-smoke: ## If AUTO=1 then run direct smoke (fallback to localhost)
 gp-smoke-direct: ## Wait direct ingress, then smoke (fallback to localhost)
 > @set -euo pipefail; \
 	host="$(INGRESS_HOST)"; \
-	url="http://$$host:$(INGRESS_HTTP_PORT)/"; \
-	echo "==> waiting ingress: $$url"; \
+	base="http://$$host:$(INGRESS_HTTP_PORT)"; \
+	echo "==> waiting ingress: $$base/"; \
 	ok=0; \
-	for i in $$(seq 1 80); do \
-	  if curl -sS "$$url" >/dev/null 2>&1; then ok=1; break; fi; \
+	for i in $$(seq 1 120); do \
+	  if curl -sS "$$base/" >/dev/null 2>&1; then ok=1; break; fi; \
 	  sleep 0.25; \
 	done; \
 	if [ $$ok -ne 1 ]; then \
 	  echo "⚠️ not reachable via $(INGRESS_HOST). Trying localhost..."; \
 	  host="localhost"; \
-	  url="http://$$host:$(INGRESS_HTTP_PORT)/"; \
+	  base="http://$$host:$(INGRESS_HTTP_PORT)"; \
 	  ok=0; \
-	  for i in $$(seq 1 80); do \
-	    if curl -sS "$$url" >/dev/null 2>&1; then ok=1; break; fi; \
+	  for i in $$(seq 1 120); do \
+	    if curl -sS "$$base/" >/dev/null 2>&1; then ok=1; break; fi; \
 	    sleep 0.25; \
 	  done; \
 	fi; \
@@ -539,24 +559,34 @@ smoke-login: ## Smoke: login via ingress and print token
 	  echo "$$resp" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'; \
 	fi
 
-smoke-todos: ## Smoke: list todos via ingress (auto token)
+smoke-todos: ## Smoke: list todos via ingress (auto token; retry 502/503)
 > @set -euo pipefail; \
-  host="$(SMOKE_HOST)"; \
-  base="http://$$host:$(INGRESS_HTTP_PORT)"; \
-  token="$${TOKEN:-}"; \
-  if [ -z "$$token" ]; then \
-    resp=$$(curl -sS "$$base/auth/login" -H "Content-Type: application/json" -d '{"username":"user-123","password":"password"}'); \
-    if command -v jq >/dev/null 2>&1; then token=$$(echo "$$resp" | jq -r '.accessToken'); else token=$$(echo "$$resp" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'); fi; \
-  fi; \
-  echo "==> GET $$base/v1/todos"; \
-  for i in $$(seq 1 40); do \
-    out=$$(curl -sS -w "\n%{http_code}" "$$base/v1/todos" -H "Authorization: Bearer $$token" || true); \
-    code="$$(echo "$$out" | tail -n1)"; body="$$(echo "$$out" | sed '$$d')"; \
-    if [ "$$code" = "200" ]; then echo "$$body" | (command -v jq >/dev/null 2>&1 && jq . || cat); exit 0; fi; \
-    if [ "$$code" = "502" ] || [ "$$code" = "503" ]; then sleep 0.25; continue; fi; \
-    echo "$$body"; echo "❌ unexpected status $$code"; exit 1; \
-  done; \
-  echo "❌ timed out waiting for upstream (still 502/503)"; exit 1
+	host="$(SMOKE_HOST)"; \
+	base="http://$$host:$(INGRESS_HTTP_PORT)"; \
+	token="$${TOKEN:-}"; \
+	if [ -z "$$token" ]; then \
+	  resp=$$(curl -sS "$$base/auth/login" -H "Content-Type: application/json" -d '{"username":"user-123","password":"password"}' || true); \
+	  if [ -z "$$resp" ]; then echo "❌ login failed."; exit 1; fi; \
+	  if command -v jq >/dev/null 2>&1; then token=$$(echo "$$resp" | jq -r '.accessToken'); else token=$$(echo "$$resp" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'); fi; \
+	fi; \
+	echo "==> GET $$base/v1/todos"; \
+	for i in $$(seq 1 80); do \
+	  out=$$(curl -sS -w "\n%{http_code}" "$$base/v1/todos" -H "Authorization: Bearer $$token" || true); \
+	  code="$$(echo "$$out" | tail -n1)"; body="$$(echo "$$out" | sed '$$d')"; \
+	  if [ "$$code" = "200" ]; then \
+	    echo "$$body" | (command -v jq >/dev/null 2>&1 && jq . || cat); \
+	    exit 0; \
+	  fi; \
+	  if [ "$$code" = "502" ] || [ "$$code" = "503" ]; then \
+	    sleep 0.25; \
+	    continue; \
+	  fi; \
+	  echo "$$body"; \
+	  echo "❌ unexpected status $$code"; \
+	  exit 1; \
+	done; \
+	echo "❌ timed out waiting for upstream (still 502/503)"; \
+	exit 1
 
 smoke: smoke-todos ## Smoke: login + list todos via ingress
 
@@ -625,6 +655,33 @@ mysql-wipe: ## Uninstall mysql release + delete PVCs (VERY DANGEROUS) [CONFIRM=1
 > @echo "==> deleting PVCs like data-$(MYSQL_RELEASE)-* in ns=$(K8S_NAMESPACE)"
 > @p="$$( $(KUBECTL) get pvc -n $(K8S_NAMESPACE) --no-headers 2>/dev/null | awk '$$1 ~ /^data-$(MYSQL_RELEASE)-/ {print $$1}' )"; \
 	if [ -z "$$p" ]; then echo "No PVCs found."; else echo "$$p" | xargs -r $(KUBECTL) delete pvc -n $(K8S_NAMESPACE); fi
+
+# =========================================================
+##@ Diagnostics
+# =========================================================
+.PHONY: diag
+diag: ## Snapshot for troubleshooting (context/pods/svc/ingress/endpoints/events/helm)
+> @set -euo pipefail; \
+	echo "== kubectl context =="; $(KUBECTL) config current-context || true; \
+	echo ""; \
+	echo "== nodes =="; $(KUBECTL) get nodes -o wide || true; \
+	echo ""; \
+	echo "== pods (all) =="; $(KUBECTL) get pods -A -o wide || true; \
+	echo ""; \
+	echo "== svc (ns=$(K8S_NAMESPACE)) =="; $(KUBECTL) get svc -n $(K8S_NAMESPACE) || true; \
+	echo ""; \
+	echo "== ingress (ns=$(K8S_NAMESPACE)) =="; $(KUBECTL) get ingress -n $(K8S_NAMESPACE) || true; \
+	echo ""; \
+	echo "== endpoints (ns=$(K8S_NAMESPACE)) =="; $(KUBECTL) get endpoints -n $(K8S_NAMESPACE) || true; \
+	echo ""; \
+	echo "== describe ingress http-gateway =="; $(KUBECTL) describe ingress http-gateway -n $(K8S_NAMESPACE) || true; \
+	echo ""; \
+	echo "== events (ns=$(K8S_NAMESPACE), last 40) =="; $(KUBECTL) get events -n $(K8S_NAMESPACE) --sort-by=.lastTimestamp | tail -n 40 || true; \
+	echo ""; \
+	echo "== helm status =="; \
+	$(HELM) status $(HELM_RELEASE) -n $(K8S_NAMESPACE) || true; \
+	$(HELM) status $(MYSQL_RELEASE) -n $(K8S_NAMESPACE) || true; \
+	$(HELM) status $(INGRESS_RELEASE) -n $(INGRESS_NS) || true
 
 # =========================================================
 ##@ Optional local dev (kept)
