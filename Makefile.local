@@ -11,28 +11,29 @@
 # ---------------------------------------------------------
 # Basic tools (optional)
 # ---------------------------------------------------------
-GO             ?= go
-GO_RUN         ?= $(GO) run
-GO_BUILD       ?= $(GO) build
-GRPCURL        ?= grpcurl
+GO       ?= go
+GO_RUN   ?= $(GO) run
+GO_BUILD ?= $(GO) build
+GRPCURL  ?= grpcurl
 
-DOCKER_COMPOSE ?= docker-compose
+# Prefer `docker compose`, fallback to `docker-compose`
+DOCKER_COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
 # ---------------------------------------------------------
 # Addresses (local dev)
 # ---------------------------------------------------------
-GRPC_ADDR          ?= localhost:50051
-HTTP_GATEWAY_ADDR  ?= localhost:8081
-METRICS_ADDR       ?= localhost:9464
+GRPC_ADDR         ?= localhost:50051
+HTTP_GATEWAY_ADDR ?= localhost:8081
+METRICS_ADDR      ?= localhost:9464
 
-GRPC_HOST          := $(word 1,$(subst :, ,$(GRPC_ADDR)))
-GRPC_PORT          := $(word 2,$(subst :, ,$(GRPC_ADDR)))
+GRPC_HOST := $(word 1,$(subst :, ,$(GRPC_ADDR)))
+GRPC_PORT := $(word 2,$(subst :, ,$(GRPC_ADDR)))
 
-HTTP_GATEWAY_HOST  := $(word 1,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
-HTTP_GATEWAY_PORT  := $(word 2,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
+HTTP_GATEWAY_HOST := $(word 1,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
+HTTP_GATEWAY_PORT := $(word 2,$(subst :, ,$(HTTP_GATEWAY_ADDR)))
 
-METRICS_HOST       := $(word 1,$(subst :, ,$(METRICS_ADDR)))
-METRICS_PORT       := $(word 2,$(subst :, ,$(METRICS_ADDR)))
+METRICS_HOST := $(word 1,$(subst :, ,$(METRICS_ADDR)))
+METRICS_PORT := $(word 2,$(subst :, ,$(METRICS_ADDR)))
 
 SERVICE ?=
 
@@ -85,19 +86,24 @@ docker-stop-gw: ## (Optional) Stop http-gateway container
 # =========================================================
 .PHONY: compose-up compose-db compose-down compose-logs compose-ps
 
-compose-up: ## (Optional) docker-compose up --build
+compose-up: ## (Optional) docker compose up --build
+	@command -v $(word 1,$(DOCKER_COMPOSE)) >/dev/null 2>&1 || (echo "❌ docker compose/docker-compose not found" && exit 1)
 	$(DOCKER_COMPOSE) up --build
 
-compose-db: ## (Optional) docker-compose up -d db
+compose-db: ## (Optional) docker compose up -d db
+	@command -v $(word 1,$(DOCKER_COMPOSE)) >/dev/null 2>&1 || (echo "❌ docker compose/docker-compose not found" && exit 1)
 	$(DOCKER_COMPOSE) up -d db
 
-compose-down: ## (Optional) docker-compose down
+compose-down: ## (Optional) docker compose down
+	@command -v $(word 1,$(DOCKER_COMPOSE)) >/dev/null 2>&1 || (echo "❌ docker compose/docker-compose not found" && exit 1)
 	$(DOCKER_COMPOSE) down
 
-compose-logs: ## (Optional) docker-compose logs -f
+compose-logs: ## (Optional) docker compose logs -f
+	@command -v $(word 1,$(DOCKER_COMPOSE)) >/dev/null 2>&1 || (echo "❌ docker compose/docker-compose not found" && exit 1)
 	$(DOCKER_COMPOSE) logs -f
 
-compose-ps: ## (Optional) docker-compose ps
+compose-ps: ## (Optional) docker compose ps
+	@command -v $(word 1,$(DOCKER_COMPOSE)) >/dev/null 2>&1 || (echo "❌ docker compose/docker-compose not found" && exit 1)
 	$(DOCKER_COMPOSE) ps
 
 # =========================================================
@@ -107,6 +113,7 @@ compose-ps: ## (Optional) docker-compose ps
 
 fmt: ## (Optional) gofmt all *.go
 	@echo "==> gofmt all *.go"
+	@command -v gofmt >/dev/null 2>&1 || (echo "❌ gofmt not found" && exit 1)
 	@gofmt -w $$(find . -name '*.go' -not -path "./vendor/*")
 
 vet: ## (Optional) go vet ./...
@@ -121,6 +128,7 @@ build: ## (Optional) go build ./...
 	$(GO) build ./...
 
 tree: ## (Optional) tree -L 4
+	@command -v tree >/dev/null 2>&1 || (echo "❌ tree not found (install tree)" && exit 1)
 	tree -L 4
 
 # =========================================================
@@ -129,6 +137,7 @@ tree: ## (Optional) tree -L 4
 .PHONY: health evans jwt jwt-print
 
 health: ## (Optional) gRPC health check (SERVICE=... optional)
+	@command -v $(GRPCURL) >/dev/null 2>&1 || (echo "❌ grpcurl not found" && exit 1)
 	@if [ -z "$(SERVICE)" ]; then \
 		echo "Checking overall health..."; \
 		$(GRPCURL) -plaintext -d '{}' $(GRPC_ADDR) grpc.health.v1.Health/Check; \
@@ -138,12 +147,13 @@ health: ## (Optional) gRPC health check (SERVICE=... optional)
 	fi
 
 evans: ## (Optional) evans repl to gRPC
+	@command -v evans >/dev/null 2>&1 || (echo "❌ evans not found" && exit 1)
 	evans --host $(GRPC_HOST) --port $(GRPC_PORT) -r repl
 
-jwt-print: ## (Optional) Print token only
-	cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
+jwt-print: ## (Optional) Print token only (cmd/jwt_gen)
+	@cd cmd/jwt_gen && AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .
 
-jwt: ## (Optional) Print 'export TOKEN=...' for eval
+jwt: ## (Optional) Print 'export TOKEN=...' for eval (cmd/jwt_gen)
 	@cd cmd/jwt_gen && \
 	  token=$$(AUTH_SECRET=$(JWT_SECRET) $(GO_RUN) .); \
 	  echo "export TOKEN=$$token"
@@ -154,55 +164,59 @@ jwt: ## (Optional) Print 'export TOKEN=...' for eval
 .PHONY: k-grpc k-gw k-metrics k-graf k-ingress k-ingress-logs k-mysql k-mysql-logs k-otel-logs
 
 k-grpc: ## (Optional) port-forward grpc-echo service (grpc)
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(GRPC_PORT):50051
 
 k-gw: ## (Optional) port-forward http-gateway service
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/http-gateway $(HTTP_GATEWAY_PORT):8081
 
 k-metrics: ## (Optional) port-forward metrics
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grpc-echo $(METRICS_PORT):9464
 
 k-graf: ## (Optional) port-forward grafana (localhost:3000)
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) port-forward -n $(K8S_NAMESPACE) svc/grafana 3000:3000
 
 k-ingress: ## (Optional) get ingress-nginx pods/svc
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) get pods,svc -n ingress-nginx -o wide
 
 k-ingress-logs: ## (Optional) tail ingress-nginx controller logs
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) logs -n ingress-nginx deploy/ingress-nginx-controller -f
 
-k-mysql: ## (Optional) login mysql inside k8s (root/root, grpcdb)
-	$(KUBECTL) exec -it -n $(K8S_NAMESPACE) \
-	  $$($(KUBECTL) get pod -l app=mysql -n $(K8S_NAMESPACE) -o jsonpath='{.items[0].metadata.name}') \
-	  -- mysql -uroot -proot grpcdb
+# --- MySQL chart is StatefulSet based (helm/mysql) ---
+k-mysql: ## (Optional) mysql shell (alias of mysql-shell)
+	@$(MAKE) --no-print-directory mysql-shell
 
-k-mysql-logs: ## (Optional) tail mysql logs
-	$(KUBECTL) logs deploy/mysql -n $(K8S_NAMESPACE) -f
+k-mysql-logs: ## (Optional) tail mysql logs (alias of mysql-logs)
+	@$(MAKE) --no-print-directory mysql-logs
 
 k-otel-logs: ## (Optional) tail otel-collector logs
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) logs deploy/otel-collector -n $(K8S_NAMESPACE) -f
 
-
-# Optional local overrides / convenience targets
-# This file is ignored by git (recommended). Keep machine-specific stuff here.
-
-K8S_NAMESPACE ?= default
-KIND_CLUSTER  ?= grpc-echo
-
+# =========================================================
+##@ Optional: kind cluster + /etc/hosts helpers (local machine)
+# =========================================================
 .PHONY: kind-up kind-down hosts-up hosts-down
 
 kind-up: ## Create kind cluster if missing (name=KIND_CLUSTER)
 	@set -euo pipefail; \
-	if kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	command -v $(KIND) >/dev/null 2>&1 || (echo "❌ kind not found" && exit 1); \
+	if $(KIND) get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
 	  echo "✅ kind cluster exists: $(KIND_CLUSTER)"; \
 	else \
 	  echo "==> creating kind cluster: $(KIND_CLUSTER)"; \
-	  kind create cluster --name "$(KIND_CLUSTER)"; \
+	  $(KIND) create cluster --name "$(KIND_CLUSTER)"; \
 	fi
 
 kind-down: ## Delete kind cluster (DANGEROUS) [CONFIRM=1]
 	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
-	kind delete cluster --name "$(KIND_CLUSTER)"
+	@command -v $(KIND) >/dev/null 2>&1 || (echo "❌ kind not found" && exit 1)
+	$(KIND) delete cluster --name "$(KIND_CLUSTER)"
 
 hosts-up: ## Add grpc-echo.local to /etc/hosts (DANGEROUS) [CONFIRM=1]
 	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi

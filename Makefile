@@ -34,8 +34,9 @@ VALUES_FILE ?= $(CHART_DIR)/values.$(ENV).yaml
 # ---------------------------------------------------------
 # Proto
 # ---------------------------------------------------------
+PROTOC ?= protoc
 PROTO_DIRS     := $(shell find api -name '*.proto' -exec dirname {} \; | sort -u)
-GATEWAY_PROTOS  := $(shell find api -name '*.proto' -print)
+GATEWAY_PROTOS := $(shell find api -name '*.proto' -print)
 
 # ---------------------------------------------------------
 # k-logs UX defaults
@@ -76,9 +77,9 @@ help: ## Show help (main targets first; optional targets are listed after if Mak
 # =========================================================
 ##@ Main: Golden Path
 # =========================================================
-.PHONY: gp preflight guard-context context diag sot-audit sot-assert
+.PHONY: gp preflight guard-context context diag sot-audit sot-assert check-values
 
-gp: preflight mysql-up-wait k-rebuild-wait ## Golden path: mysql -> build/load -> helm up(wait/atomic) -> rollout -> assert
+gp: preflight check-values mysql-up-wait k-rebuild-wait ## Golden path: mysql -> build/load -> helm up(wait/atomic) -> rollout -> assert
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1) In another terminal: make k-ingress-pf"
@@ -94,6 +95,10 @@ preflight: guard-context ## Preflight checks (tools + kube context)
 	echo "kubectl context: $$($(KUBECTL) config current-context 2>/dev/null || echo '<none>')"; \
 	echo "namespace      : $(K8S_NAMESPACE)"
 
+check-values: ## Check ENV/VALUES_FILE exists
+	@set -euo pipefail; \
+	test -f "$(VALUES_FILE)" || (echo "❌ values file not found: $(VALUES_FILE) (ENV=$(ENV))" && exit 1)
+
 guard-context: ## Guard: verify kubectl context (set ALLOW_OTHER_CONTEXT=1 to bypass)
 	@set -euo pipefail; \
 	ctx="$$( $(KUBECTL) config current-context 2>/dev/null || true )"; \
@@ -106,6 +111,7 @@ guard-context: ## Guard: verify kubectl context (set ALLOW_OTHER_CONTEXT=1 to by
 	fi
 
 context: ## Show current kubectl context + ns + nodes
+	@$(MAKE) --no-print-directory guard-context
 	@echo "context: $$($(KUBECTL) config current-context)"; \
 	echo "ns     : $(K8S_NAMESPACE)"; \
 	echo ""; \
@@ -122,6 +128,7 @@ diag: ## Quick diagnostics bundle (context/status/events/helm)
 	@$(MAKE) --no-print-directory mysql-status || true
 
 sot-audit: ## Audit helm-managed labels/annotations for key app resources
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	ns="$(K8S_NAMESPACE)"; \
 	for r in \
@@ -140,6 +147,7 @@ sot-audit: ## Audit helm-managed labels/annotations for key app resources
 	done
 
 sot-assert: ## Assert app resources are Helm-managed (fail if SoT looks broken)
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	ns="$(K8S_NAMESPACE)"; \
 	bad=0; \
@@ -158,12 +166,20 @@ sot-assert: ## Assert app resources are Helm-managed (fail if SoT looks broken)
 # =========================================================
 # Protobuf
 # =========================================================
-.PHONY: proto
-proto: ## Generate protobuf (go / go-grpc / grpc-gateway)
+.PHONY: proto proto-preflight
+proto-preflight: ## Check protoc + plugins exist
+	@set -euo pipefail; \
+	command -v $(PROTOC) >/dev/null 2>&1 || (echo "❌ missing command: $(PROTOC)" && exit 1); \
+	command -v protoc-gen-go >/dev/null 2>&1 || (echo "❌ missing: protoc-gen-go (go install google.golang.org/protobuf/cmd/protoc-gen-go@latest)" && exit 1); \
+	command -v protoc-gen-go-grpc >/dev/null 2>&1 || (echo "❌ missing: protoc-gen-go-grpc (go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest)" && exit 1); \
+	command -v protoc-gen-grpc-gateway >/dev/null 2>&1 || (echo "❌ missing: protoc-gen-grpc-gateway (go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest)" && exit 1); \
+	echo "✅ protoc tools OK"
+
+proto: proto-preflight ## Generate protobuf (go / go-grpc / grpc-gateway)
 	@echo "==> Generating protobufs..."
 	@for dir in $(PROTO_DIRS); do \
 		echo " -> $$dir"; \
-		protoc \
+		$(PROTOC) \
 		  -I . \
 		  -I third_party \
 		  --go_out=paths=source_relative:. \
@@ -173,7 +189,7 @@ proto: ## Generate protobuf (go / go-grpc / grpc-gateway)
 	@echo "==> Generating gRPC-Gateway..."
 	@for file in $(GATEWAY_PROTOS); do \
 		echo " -> $$file"; \
-		protoc \
+		$(PROTOC) \
 		  -I . \
 		  -I third_party \
 		  --grpc-gateway_out=paths=source_relative,generate_unbound_methods=true:. \
@@ -185,7 +201,7 @@ proto: ## Generate protobuf (go / go-grpc / grpc-gateway)
 # =========================================================
 .PHONY: h-template h-lint h-status h-up h-up-wait h-rollback h-uninstall h-values h-manifest
 
-h-template: ## helm template (ENV=dev|prod, tag=TAG)
+h-template: check-values ## helm template (ENV=dev|prod, tag=TAG)
 	$(HELM) template $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) -f $(VALUES_FILE) \
 	  --set global.imageTag=$(TAG)
 
@@ -193,30 +209,37 @@ h-lint: ## helm lint
 	$(HELM) lint $(CHART_DIR)
 
 h-status: ## helm status
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) status $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
-h-up: ## helm upgrade --install (tag=TAG)
+h-up: check-values ## helm upgrade --install (tag=TAG)
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
 	  -f $(VALUES_FILE) \
 	  --set global.imageTag=$(TAG)
 
-h-up-wait: ## helm upgrade --install --wait --timeout 5m --atomic (tag=TAG)
+h-up-wait: check-values ## helm upgrade --install --wait --timeout 5m --atomic (tag=TAG)
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
 	  -f $(VALUES_FILE) \
 	  --set global.imageTag=$(TAG) \
 	  --wait --timeout 5m --atomic
 
 h-rollback: ## helm rollback
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) rollback $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
 h-uninstall: ## helm uninstall (DANGEROUS) [CONFIRM=1]
+	@$(MAKE) --no-print-directory guard-context
 	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
 	$(HELM) uninstall $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
 h-values: ## helm get values -a
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) get values $(HELM_RELEASE) -n $(K8S_NAMESPACE) -a
 
 h-manifest: ## helm get manifest
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) get manifest $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
 # =========================================================
@@ -225,6 +248,7 @@ h-manifest: ## helm get manifest
 .PHONY: k-status k-logs k-wait k-image-check k-image-assert k-ingress-pf k-clean k-events k-describe
 
 k-status: ## Show pods/services/ingress
+	@$(MAKE) --no-print-directory guard-context
 	@echo "== Pods =="; $(KUBECTL) get pods -n $(K8S_NAMESPACE) -o wide
 	@echo ""
 	@echo "== Services =="; $(KUBECTL) get svc -n $(K8S_NAMESPACE)
@@ -232,9 +256,11 @@ k-status: ## Show pods/services/ingress
 	@echo "== Ingress =="; $(KUBECTL) get ingress -n $(K8S_NAMESPACE) || true
 
 k-events: ## Show recent events (sorted)
+	@$(MAKE) --no-print-directory guard-context
 	@$(KUBECTL) get events -n $(K8S_NAMESPACE) --sort-by=.lastTimestamp | tail -n 50 || true
 
 k-describe: ## Describe key pods (grpc-echo/http-gateway/mysql-0)
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	ns="$(K8S_NAMESPACE)"; \
 	for p in $$( $(KUBECTL) get pod -n $$ns -o name | egrep 'grpc-echo-|http-gateway-|mysql-0' || true ); do \
@@ -244,6 +270,7 @@ k-describe: ## Describe key pods (grpc-echo/http-gateway/mysql-0)
 	done
 
 k-logs: ## Tail logs (default APP=grpc-echo). Options: POD=... CONTAINER=... TAIL=200 FOLLOW=1 SINCE=... PREVIOUS=0
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	ns="$(K8S_NAMESPACE)"; \
 	follow=""; [ "$(FOLLOW)" = "1" ] && follow="-f"; \
@@ -260,16 +287,19 @@ k-logs: ## Tail logs (default APP=grpc-echo). Options: POD=... CONTAINER=... TAI
 	fi
 
 k-wait: ## Wait rollout for grpc-echo and http-gateway
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) rollout status deploy/grpc-echo -n $(K8S_NAMESPACE)
 	$(KUBECTL) rollout status deploy/http-gateway -n $(K8S_NAMESPACE)
 
 k-image-check: ## Show deployment images
+	@$(MAKE) --no-print-directory guard-context
 	@echo "grpc-echo image:"
 	@$(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o jsonpath='{.spec.template.spec.containers[0].image}'; echo
 	@echo "http-gateway image:"
 	@$(KUBECTL) get deploy http-gateway -n $(K8S_NAMESPACE) -o jsonpath='{.spec.template.spec.containers[0].image}'; echo
 
 k-image-assert: ## Assert deployments are running expected tag (TAG=...)
+	@$(MAKE) --no-print-directory guard-context
 	@grpc_img="$$( $(KUBECTL) get deploy grpc-echo -n $(K8S_NAMESPACE) -o jsonpath='{.spec.template.spec.containers[0].image}' )"; \
 	gw_img="$$( $(KUBECTL) get deploy http-gateway -n $(K8S_NAMESPACE) -o jsonpath='{.spec.template.spec.containers[0].image}' )"; \
 	exp_grpc="$(GRPC_IMAGE_REPO):$(TAG)"; \
@@ -281,11 +311,13 @@ k-image-assert: ## Assert deployments are running expected tag (TAG=...)
 	[ "$$grpc_img" = "$$exp_grpc" ] && [ "$$gw_img" = "$$exp_gw" ] && echo "✅ image tag match" || (echo "❌ image tag mismatch" && exit 1)
 
 k-ingress-pf: ## Port-forward ingress-nginx controller to localhost:8080
+	@$(MAKE) --no-print-directory guard-context
 	@$(KUBECTL) get svc -n ingress-nginx ingress-nginx-controller >/dev/null 2>&1 || \
 	  (echo "❌ ingress-nginx-controller not found. Install ingress-nginx first." && exit 1)
 	$(KUBECTL) port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
 
 k-clean: ## Delete unhealthy pods (ImagePullBackOff/ErrImagePull/CrashLoopBackOff) in namespace
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	echo "==> Deleting unhealthy pods in ns=$(K8S_NAMESPACE)"; \
 	pods="$$( $(KUBECTL) get pods -n $(K8S_NAMESPACE) --no-headers 2>/dev/null | \
@@ -369,28 +401,36 @@ MYSQL_POD        ?= mysql-0
 MYSQL_DUMP       ?= /tmp/grpcdb.sql
 
 mysql-up: ## Deploy mysql (no wait)
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) upgrade --install $(MYSQL_RELEASE) $(MYSQL_CHART_DIR) -n $(K8S_NAMESPACE)
 
 mysql-up-wait: ## Deploy mysql (wait/atomic)
+	@$(MAKE) --no-print-directory guard-context
 	$(HELM) upgrade --install $(MYSQL_RELEASE) $(MYSQL_CHART_DIR) -n $(K8S_NAMESPACE) \
 	  --wait --timeout 10m --atomic
 
 mysql-wait: ## Wait mysql StatefulSet rollout
-	$(KUBECTL) rollout status sts/mysql -n $(K8S_NAMESPACE) --timeout=10m
+	@$(MAKE) --no-print-directory guard-context
+	$(KUBECTL) rollout status sts/$(MYSQL_RELEASE) -n $(K8S_NAMESPACE) --timeout=10m
 
 mysql-status: ## Show mysql resources (sts/pod/svc/pvc)
-	@$(KUBECTL) get sts,pod,svc,pvc -n $(K8S_NAMESPACE) | egrep -n 'NAME|mysql|data-mysql' || true
+	@$(MAKE) --no-print-directory guard-context
+	@$(KUBECTL) get sts,pod,svc,pvc -n $(K8S_NAMESPACE) | egrep -n 'NAME|$(MYSQL_RELEASE)|data-$(MYSQL_RELEASE)' || true
 
 mysql-logs: ## Tail mysql logs (sts/mysql)
-	$(KUBECTL) logs -n $(K8S_NAMESPACE) -f sts/mysql --tail=200
+	@$(MAKE) --no-print-directory guard-context
+	$(KUBECTL) logs -n $(K8S_NAMESPACE) -f sts/$(MYSQL_RELEASE) --tail=200
 
 mysql-shell: ## Exec mysql client in mysql-0 (root)
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) exec -n $(K8S_NAMESPACE) -it $(MYSQL_POD) -- sh -lc 'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD"'
 
 mysql-init-check: ## Check init.sql applied (SHOW TABLES in grpcdb)
+	@$(MAKE) --no-print-directory guard-context
 	$(KUBECTL) exec -n $(K8S_NAMESPACE) $(MYSQL_POD) -- sh -lc 'mysql -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "USE $(MYSQL_DB); SHOW TABLES;"'
 
 mysql-backup: ## Backup DB to MYSQL_DUMP (default: /tmp/grpcdb.sql)
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	out="$(MYSQL_DUMP)"; \
 	mkdir -p "$$(dirname "$$out")"; \
@@ -400,6 +440,7 @@ mysql-backup: ## Backup DB to MYSQL_DUMP (default: /tmp/grpcdb.sql)
 	ls -lh "$$out"
 
 mysql-restore: ## Restore DB from MYSQL_DUMP into MYSQL_DB (DANGEROUS: overwrites data logically)
+	@$(MAKE) --no-print-directory guard-context
 	@set -euo pipefail; \
 	in="$(MYSQL_DUMP)"; \
 	test -f "$$in" || (echo "❌ dump not found: $$in" && exit 1); \
@@ -409,10 +450,12 @@ mysql-restore: ## Restore DB from MYSQL_DUMP into MYSQL_DB (DANGEROUS: overwrite
 	echo "✅ restore done"
 
 mysql-uninstall: ## Uninstall mysql release (DANGEROUS) [CONFIRM=1] (PVC may remain)
+	@$(MAKE) --no-print-directory guard-context
 	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
 	$(HELM) uninstall $(MYSQL_RELEASE) -n $(K8S_NAMESPACE)
 
 mysql-wipe: ## Uninstall mysql release + delete PVCs (VERY DANGEROUS) [CONFIRM=1]
+	@$(MAKE) --no-print-directory guard-context
 	@if [ "$(CONFIRM)" != "1" ]; then echo "Refusing. Set CONFIRM=1 to proceed."; exit 1; fi
 	-$(HELM) uninstall $(MYSQL_RELEASE) -n $(K8S_NAMESPACE)
 	@echo "==> deleting PVCs like data-$(MYSQL_RELEASE)-* in ns=$(K8S_NAMESPACE)"
