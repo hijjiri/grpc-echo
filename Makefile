@@ -104,6 +104,9 @@ INGRESS_RELEASE ?= ingress-nginx
 INGRESS_CHART ?= ingress-nginx/ingress-nginx
 INGRESS_VALUES_KIND ?= ./k8s/ingress-nginx/values.kind.yaml
 
+# NOTE:
+#  - 推奨( sudo不要 ) : grpc-echo.127.0.0.1.sslip.io (Makefile.localで上書き)
+#  - 既定値は互換のため .local のまま
 INGRESS_HOST ?= grpc-echo.local
 INGRESS_HTTP_PORT ?= 8080
 INGRESS_HTTPS_PORT ?= 8443
@@ -126,6 +129,18 @@ OBS_DIR ?= ./k8s/observability
 # Local overrides file (NO TARGETS POLICY)
 # =========================================================
 -include Makefile.local
+
+# =========================================================
+# Common helm args (macro)
+# =========================================================
+HELM_APP_COMMON_ARGS = \
+  -n $(K8S_NAMESPACE) \
+  -f $(VALUES_FILE) \
+  --set global.imageTag=$(TAG) \
+  --set ingress.host=$(INGRESS_HOST)
+
+HELM_APP_WAIT_ARGS = \
+  --wait --timeout 5m --atomic
 
 # =========================================================
 # Help
@@ -311,49 +326,51 @@ HOSTS_IP   ?= 127.0.0.1
 
 .PHONY: hosts-ensure hosts-up hosts-down
 
+# NOTE:
+# ここは "Makefileの行継続" で 1つのレシピ行として実行する（継続行に '>' を付けない）
 hosts-ensure: ## Optionally ensure /etc/hosts has INGRESS_HOST -> 127.0.0.1 (AUTO_HOSTS=1; first time requires CONFIRM=1)
 > @set -euo pipefail; \
->   hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; ip="$(HOSTS_IP)"; \
->   if [ "$(AUTO_HOSTS)" != "1" ]; then \
->     echo "==> hosts update skipped (AUTO_HOSTS=$(AUTO_HOSTS))"; \
->     echo "    If you want it: make hosts-up CONFIRM=1"; \
->     exit 0; \
->   fi; \
->   if sudo grep -qE "^[[:space:]]*$$ip[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
->     echo "✅ hosts already present: $$host -> $$ip"; \
->     exit 0; \
->   fi; \
->   if [ "$(CONFIRM)" != "1" ]; then \
->     echo "❌ Refusing to edit $$hf without CONFIRM=1 (needed once)"; \
->     echo "   Run: make hosts-up CONFIRM=1"; \
->     exit 1; \
->   fi; \
->   $(MAKE) --no-print-directory hosts-up CONFIRM=1
+	hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; ip="$(HOSTS_IP)"; \
+	if [ "$(AUTO_HOSTS)" != "1" ]; then \
+	  echo "==> hosts update skipped (AUTO_HOSTS=$(AUTO_HOSTS))"; \
+	  echo "    If you want it: make hosts-up CONFIRM=1"; \
+	  exit 0; \
+	fi; \
+	if sudo grep -qE "^[[:space:]]*$$ip[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
+	  echo "✅ hosts already present: $$host -> $$ip"; \
+	  exit 0; \
+	fi; \
+	if [ "$(CONFIRM)" != "1" ]; then \
+	  echo "❌ Refusing to edit $$hf without CONFIRM=1 (needed once)"; \
+	  echo "   Run: make hosts-up CONFIRM=1"; \
+	  exit 1; \
+	fi; \
+	$(MAKE) --no-print-directory hosts-up CONFIRM=1
 
 hosts-up: ## Add INGRESS_HOST to /etc/hosts (DANGEROUS) [CONFIRM=1]
 > @set -euo pipefail; \
->   if [ "$(CONFIRM)" != "1" ]; then \
->     echo "❌ Refusing (dangerous). Run with CONFIRM=1"; \
->     exit 1; \
->   fi; \
->   hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; ip="$(HOSTS_IP)"; \
->   echo "==> ensuring hosts entry: $$host -> $$ip (file: $$hf)"; \
->   if sudo grep -qE "^[[:space:]]*$$ip[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
->     echo "✅ already present"; \
->     exit 0; \
->   fi; \
->   if sudo grep -qE "^[[:space:]]*[0-9.]+[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
->     echo "❌ $$host already exists with a different IP:"; \
->     sudo grep -nE "^[[:space:]]*[0-9.]+[[:space:]]+$$host([[:space:]]|$$)" "$$hf" || true; \
->     echo "   Please edit $$hf manually, then rerun."; \
->     exit 1; \
->   fi; \
->   ts="$$(date +%Y%m%d%H%M%S)"; \
->   echo "==> backup $$hf -> $$hf.bak.$$ts"; \
->   sudo cp -a "$$hf" "$$hf.bak.$$ts"; \
->   echo "$$ip $$host" | sudo tee -a "$$hf" >/dev/null; \
->   echo "✅ added: $$ip $$host"; \
->   (getent hosts "$$host" || true) | sed -n '1,2p' || true
+	if [ "$(CONFIRM)" != "1" ]; then \
+	  echo "❌ Refusing (dangerous). Run with CONFIRM=1"; \
+	  exit 1; \
+	fi; \
+	hf="$(HOSTS_FILE)"; host="$(INGRESS_HOST)"; ip="$(HOSTS_IP)"; \
+	echo "==> ensuring hosts entry: $$host -> $$ip (file: $$hf)"; \
+	if sudo grep -qE "^[[:space:]]*$$ip[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
+	  echo "✅ already present"; \
+	  exit 0; \
+	fi; \
+	if sudo grep -qE "^[[:space:]]*[0-9.]+[[:space:]]+$$host([[:space:]]|$$)" "$$hf"; then \
+	  echo "❌ $$host already exists with a different IP:"; \
+	  sudo grep -nE "^[[:space:]]*[0-9.]+[[:space:]]+$$host([[:space:]]|$$)" "$$hf" || true; \
+	  echo "   Please edit $$hf manually, then rerun."; \
+	  exit 1; \
+	fi; \
+	ts="$$(date +%Y%m%d%H%M%S)"; \
+	echo "==> backup $$hf -> $$hf.bak.$$ts"; \
+	sudo cp -a "$$hf" "$$hf.bak.$$ts"; \
+	echo "$$ip $$host" | sudo tee -a "$$hf" >/dev/null; \
+	echo "✅ added: $$ip $$host"; \
+	(getent hosts "$$host" || true) | sed -n '1,2p' || true
 
 hosts-down: ## Remove INGRESS_HOST from /etc/hosts (DANGEROUS) [CONFIRM=1]
 > @set -euo pipefail; \
@@ -473,11 +490,9 @@ proto: proto-preflight ## Generate protobuf (go / go-grpc / grpc-gateway)
 
 h-template: check-values ## helm template
 > @set -euo pipefail; \
->   $(MAKE) --no-print-directory guard-context; \
->   $(HELM) template $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
->     -f $(VALUES_FILE) \
->     --set global.imageTag=$(TAG) \
->     --set ingress.host=$(INGRESS_HOST)
+	$(MAKE) --no-print-directory guard-context; \
+	$(HELM) template $(HELM_RELEASE) $(CHART_DIR) \
+	  $(HELM_APP_COMMON_ARGS)
 
 h-lint: ## helm lint
 > @$(HELM) lint $(CHART_DIR)
@@ -488,20 +503,16 @@ h-status: ## helm status
 
 h-up: check-values ## helm upgrade --install (no wait)
 > @set -euo pipefail; \
->   $(MAKE) --no-print-directory guard-context; \
->   $(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
->     -f $(VALUES_FILE) \
->     --set global.imageTag=$(TAG) \
->     --set ingress.host=$(INGRESS_HOST)
+	$(MAKE) --no-print-directory guard-context; \
+	$(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) \
+	  $(HELM_APP_COMMON_ARGS)
 
 h-up-wait: check-values ## helm upgrade --install --wait --timeout 5m --atomic
 > @set -euo pipefail; \
->   $(MAKE) --no-print-directory guard-context; \
->   $(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
->     -f $(VALUES_FILE) \
->     --set global.imageTag=$(TAG) \
->     --set ingress.host=$(INGRESS_HOST) \
->     --wait --timeout 5m --atomic
+	$(MAKE) --no-print-directory guard-context; \
+	$(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) \
+	  $(HELM_APP_COMMON_ARGS) \
+	  $(HELM_APP_WAIT_ARGS)
 
 h-rollback: ## helm rollback
 > @$(MAKE) --no-print-directory guard-context
