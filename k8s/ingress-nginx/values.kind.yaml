@@ -1,0 +1,53 @@
+controller:
+  replicaCount: 1
+
+  nodeSelector:
+    ingress-ready: "true"
+    kubernetes.io/os: linux
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/master"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  service:
+    type: NodePort
+    nodePorts:
+      http: 30080
+      https: 30443
+
+  # hostPort は必須ではない（extraPortMappings + NodePortでOK）
+  # 残すなら有効にしてもよいが、kind では NodePort + extraPortMappings が一番安定。
+  hostPort:
+    enabled: false
+
+  publishService:
+    enabled: true
+
+  extraArgs:
+    update-status-on-shutdown: "true"
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+
+  admissionWebhooks:
+    enabled: true
+    patch:
+      enabled: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "node-role.kubernetes.io/master"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+defaultBackend:
+  enabled: false
