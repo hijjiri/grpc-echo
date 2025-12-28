@@ -1,29 +1,4 @@
-# =========================================
-# Makefile.local (Optional overrides ONLY)
-# Policy:
-#   - NO TARGETS here (to avoid "remnants"/drift)
-#   - Put only variable overrides for your machine
-# =========================================
-
-# Example overrides (uncomment as needed):
-# K8S_NAMESPACE = default
-# KIND_CLUSTER  = grpc-echo
-# K8S_CONTEXT_EXPECT = kind-$(KIND_CLUSTER)
-# ALLOW_OTHER_CONTEXT = 0
-#
-# ENV = dev
-# TAG = dev
-#
-# AUTO_KIND = 1
-# AUTO_INGRESS = 1
-# AUTO_OBS = 1
-# AUTO_HOSTS = 0
-#
-# INGRESS_HOST = grpc-echo.local
-# INGRESS_PF_PORT = 8080
-#
-# GRPC_ADDR = localhost:50051
-# HTTP_GATEWAY_ADDR = localhost:8081
-# METRICS_ADDR = localhost:9464
-#
-# JWT_SECRET = my-dev-secret-key
+# Optional overrides ONLY (NO TARGETS)
+KIND_LISTEN_ADDR = 127.0.0.1
+INGRESS_HTTP_PORT = 18080
+INGRESS_HTTPS_PORT = 18443
