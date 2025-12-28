@@ -375,6 +375,7 @@ hosts-down: ## Remove INGRESS_HOST from /etc/hosts (DANGEROUS) [CONFIRM=1]
 	      if ($$i != h) { out=out " " $$i; keep=1 } \
 	    } \
 	    if (keep==1) print out; \
+	    next; \
 	  } \
 	' "$$hf" | sudo tee "$$hf.tmp" >/dev/null; \
 	sudo mv "$$hf.tmp" "$$hf"; \
@@ -471,8 +472,12 @@ proto: proto-preflight ## Generate protobuf (go / go-grpc / grpc-gateway)
 .PHONY: h-template h-lint h-status h-up h-up-wait h-rollback h-uninstall h-values h-manifest
 
 h-template: check-values ## helm template
-> @$(MAKE) --no-print-directory guard-context
-> @$(HELM) template $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) -f $(VALUES_FILE) --set global.imageTag=$(TAG)
+> @set -euo pipefail; \
+>   $(MAKE) --no-print-directory guard-context; \
+>   $(HELM) template $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
+>     -f $(VALUES_FILE) \
+>     --set global.imageTag=$(TAG) \
+>     --set ingress.host=$(INGRESS_HOST)
 
 h-lint: ## helm lint
 > @$(HELM) lint $(CHART_DIR)
@@ -482,12 +487,21 @@ h-status: ## helm status
 > @$(HELM) status $(HELM_RELEASE) -n $(K8S_NAMESPACE)
 
 h-up: check-values ## helm upgrade --install (no wait)
-> @$(MAKE) --no-print-directory guard-context
-> @$(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) -f $(VALUES_FILE) --set global.imageTag=$(TAG)
+> @set -euo pipefail; \
+>   $(MAKE) --no-print-directory guard-context; \
+>   $(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
+>     -f $(VALUES_FILE) \
+>     --set global.imageTag=$(TAG) \
+>     --set ingress.host=$(INGRESS_HOST)
 
 h-up-wait: check-values ## helm upgrade --install --wait --timeout 5m --atomic
-> @$(MAKE) --no-print-directory guard-context
-> @$(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) -f $(VALUES_FILE) --set global.imageTag=$(TAG) --wait --timeout 5m --atomic
+> @set -euo pipefail; \
+>   $(MAKE) --no-print-directory guard-context; \
+>   $(HELM) upgrade --install $(HELM_RELEASE) $(CHART_DIR) -n $(K8S_NAMESPACE) \
+>     -f $(VALUES_FILE) \
+>     --set global.imageTag=$(TAG) \
+>     --set ingress.host=$(INGRESS_HOST) \
+>     --wait --timeout 5m --atomic
 
 h-rollback: ## helm rollback
 > @$(MAKE) --no-print-directory guard-context

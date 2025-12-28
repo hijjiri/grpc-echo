@@ -11,3 +11,9 @@ KIND_LISTEN_ADDR = 127.0.0.1
 # host ports (avoid conflicts with other services)
 INGRESS_HTTP_PORT = 18080
 INGRESS_HTTPS_PORT = 18443
+
+# URL固定（sudoなし / hostsなし）
+INGRESS_HOST = grpc-echo.127.0.0.1.sslip.io
+
+# 念のため hosts 自動編集は使わない
+AUTO_HOSTS = 0
